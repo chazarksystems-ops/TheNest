@@ -1,4 +1,4 @@
-﻿# Current Context Card
+# Current Context Card
 
 ## PROJECT
 
@@ -6,14 +6,15 @@
 
 ## CURRENT STATUS
 
-P2: Evidence + Regression Harness fully completed. Scenario regression integration tests, deterministic golden receipt tests, CLI output marker validation tests, and property checks have been implemented. All validation modes are active and verified.
+P2: Evidence + Regression Harness fully completed. Scenario regression integration tests, deterministic golden receipt tests, CLI output marker validation tests, and property checks have been implemented. All validation modes are active and verified. P3 planning cleanup complete.
 
 ## LAST COMPLETED SLICE
 
-`SLICE_P2_FINAL_CONSOLIDATION`
+`SLICE_P3_00_CONTEXT_CARD_CLEANUP`
 
 ## COMPLETED SLICES
 
+- `SLICE_P3_00_CONTEXT_CARD_CLEANUP` (docs: align roadmap queue with P3 workbench plan)
 - `SLICE_P2_01_GOLDEN_SNAPSHOTS` (Deterministic golden output tests in tests/golden)
 - `SLICE_P2_02_SCENARIO_REGRESSION` (Automated outcome regression checks in regression_tests.rs)
 - `SLICE_P2_03_CLI_STABILITY` (CLI marker output and JSON payload parser tests)
@@ -78,9 +79,9 @@ None.
 
 ## NEXT 3 SLICES
 
-1. `SLICE_P3_01_RUNTIME_DESIGN` (Design for scheduling multiple workers in a cohort)
-2. `SLICE_P3_02_IN_MEMORY_QUEUE` (Memory channel or queues for worker tasks)
-3. `SLICE_P3_03_SCHEDULER_PROTOTYPE` (Synchronous tick-based scheduler)
+1. `SLICE_P3_01_CLI_ARG_SPEC` (CLI argument specification document)
+2. `SLICE_P3_02_WORKBENCH_BINARY_DECISION` (Evolve/rename demo or create hive_workbench)
+3. `SLICE_P3_03_MANUAL_CLI_PARSER` (Implement manual command parser)
 
 ## DO NOT ADD
 

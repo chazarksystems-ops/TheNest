@@ -27,4 +27,6 @@
 | `SLICE_P2_03_CLI_STABILITY` | PASS | 2026-06-03 | `swarm_core/tests/regression_tests.rs` | cargo test | CLI output marker and structural checks. |
 | `SLICE_P2_04_PROPERTY_CHECKS` | PASS | 2026-06-03 | `swarm_core/tests/regression_tests.rs` | cargo test | Monotonicity and bounds property checks. |
 | `SLICE_P2_05_BENCH_REGRESSION_DOCS` | PASS | 2026-06-03 | `docs/P2_BENCHMARK_REGRESSION.md` | - | Benchmark comparison guides and template. |
+| `SLICE_P3_00_CONTEXT_CARD_CLEANUP` | PASS | 2026-06-05 | `ops/`, `docs/roadmap/` | - | Completed P3 planning cleanup, argument specs, and next slices queue. |
+
 
