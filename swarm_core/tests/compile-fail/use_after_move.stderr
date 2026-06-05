@@ -1,0 +1,21 @@
+error[E0382]: use of moved value: `worker`
+  --> tests/compile-fail/use_after_move.rs:13:15
+   |
+ 7 |     let worker = CattleWorker::new(Uuid::new_v4(), config, metrics);
+   |         ------ move occurs because `worker` has type `CattleWorker`, which does not implement the `Copy` trait
+...
+10 |     let _outcome = worker.tick();
+   |                           ------ `worker` moved due to this method call
+...
+13 |     let _id = worker.id;
+   |               ^^^^^^^^^ value used here after move
+   |
+note: `CattleWorker::tick` takes ownership of the receiver `self`, which moves `worker`
+  --> src/worker.rs
+   |
+   |     pub fn tick(self) -> WorkerOutcome {
+   |                 ^^^^
+help: you can `clone` the value and consume it, but this might not be your desired behavior
+   |
+10 |     let _outcome = worker.clone().tick();
+   |                          ++++++++

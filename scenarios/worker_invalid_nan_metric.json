@@ -1,0 +1,14 @@
+{
+  "scenario_name": "worker_invalid_nan_metric",
+  "config": {
+    "alpha": 1.0,
+    "beta": 1.0,
+    "gamma": 1.0,
+    "threshold": 10.0
+  },
+  "metrics": {
+    "context_bloat": null,
+    "error_rate": 1.0,
+    "coordination_debt": 1.0
+  }
+}

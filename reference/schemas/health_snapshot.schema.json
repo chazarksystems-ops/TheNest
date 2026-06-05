@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HealthSnapshot",
+  "type": "object",
+  "required": ["schema_version", "weights", "metrics", "threshold", "score", "is_terminal"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "hive.health_snapshot.v0" },
+    "weights": {
+      "type": "object",
+      "required": ["context_bloat_weight", "error_weight", "latency_weight"],
+      "properties": {
+        "context_bloat_weight": { "type": "number" },
+        "error_weight": { "type": "number" },
+        "latency_weight": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["context_bloat", "error_rate", "coordination_debt"],
+      "properties": {
+        "context_bloat": { "type": "number" },
+        "error_rate": { "type": "number" },
+        "coordination_debt": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "threshold": { "type": "number" },
+    "score": { "type": "number" },
+    "is_terminal": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

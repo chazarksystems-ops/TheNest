@@ -1,0 +1,14 @@
+{
+  "scenario_name": "worker_just_below_threshold",
+  "config": {
+    "alpha": 1.0,
+    "beta": 1.0,
+    "gamma": 1.0,
+    "threshold": 10.0
+  },
+  "metrics": {
+    "context_bloat": 4.0,
+    "error_rate": 3.0,
+    "coordination_debt": 2.0
+  }
+}

@@ -1,0 +1,9 @@
+check_id,area,requirement,command_or_method,pass_condition
+VAL-001,format,Rust formatting,cargo fmt --all --check,command exits 0
+VAL-002,compile,Rust workspace compiles,cargo check --workspace,command exits 0
+VAL-003,test,Rust tests pass,cargo test --workspace,command exits 0
+VAL-004,scope,no unauthorized crates,manual Cargo.toml review,no PyO3/vLLM/Axolotl/Docker/model deps in P0
+VAL-005,receipt,receipt serializes,unit test,valid JSON generated
+VAL-006,ledger,append-only behavior,temp-file unit test,two appends create two lines
+VAL-007,lifecycle,terminal worker consumes self,compile-tested unit pattern,terminal path yields receipt
+VAL-008,health,score formula deterministic,unit test,expected formula result

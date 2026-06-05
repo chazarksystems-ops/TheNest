@@ -1,0 +1,19 @@
+source,claim_or_concept,packet_decision,target_phase,notes
+grok,Rust/PyO3 hybrid data factory,KEEP_AS_P1_DESIGN,P1,Use after P0 Rust lifecycle foundation is proven.
+grok,Tokio async model endpoint calls,KEEP_AS_P1_DESIGN,P1,Use mocked endpoint first.
+grok,vLLM dual-model daemon launch,DEFER,P3,Requires installed-version and DGX validation.
+grok,Axolotl QLoRA config,DEFER,P4,Requires schema/data validation first.
+grok,suffering-aware router,KEEP_AS_P2_DESIGN,P2,Convert to deterministic route-cost design.
+grok,persistent blackboard metrics,KEEP_AS_P2_DESIGN,P2,Use after router types exist.
+grok,Prometheus/Grafana/TUI dashboard,DEFER,P5,Observability after runtime exists.
+grok,production-ready scripts,QUARANTINE,NA,Must not be used as ready-to-run scripts.
+gemini,Nociceptor formula,KEEP_P0,P0,Translate into health score types.
+gemini,Apoptosis consumes self,KEEP_P0,P0,Implement ownership-consuming lifecycle trait.
+gemini,Epigenetic payload,KEEP_P0_RENAMED,P0,Use WorkerExitReceipt/EpigeneticPayload.
+gemini,Cargo workspace split,KEEP_P0,P0,Implement subset first.
+gemini,Local/Global blackboard separation,KEEP_AS_P1_DESIGN,P1,Do after lifecycle and receipt are tested.
+gemini,Zero-copy borrowed prompts,ADAPT_LATER,P1,Must avoid lock-guard lifetime traps.
+gemini,ModelManager VRAM hydration,DEFER,P3,Not P0.
+gemini,Binary/hash ledger,DEFER,P2/P3,Start with JSONL receipts.
+gemini,AST hazard gate,DEFER,P2,After worker lifecycle proof.
+gemini,claims of ironclad/compile-time impossibility,QUARANTINE,NA,Replace with compile/test evidence language.

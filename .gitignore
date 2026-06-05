@@ -1,0 +1,6 @@
+/target/
+/receipts/out/*
+!/receipts/.gitkeep
+*.zip
+**/*.rs.bk
+.DS_Store

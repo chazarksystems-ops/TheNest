@@ -1,0 +1,8 @@
+order,task_id,title,status,depends_on,authorized_now
+1,RT-001,Implement swarm_core,P0_READY,none,true
+2,RT-002,Implement JSONL ledger,P0_READY_AFTER_RT001,RT-001,false
+3,RT-003,Implement minimal orchestration lifecycle proof,P0_READY_AFTER_RT002,RT-002,false
+4,RT-004,Design data-factory smoke test,DESIGN_ONLY,RT-003,false
+5,RT-005,Design route-cost router,DESIGN_ONLY,RT-003,false
+6,P3-DGX,Verify DGX/vLLM endpoints,FUTURE,RT-004,false
+7,P4-TRAIN,Prepare fine-tune packet,FUTURE,P3-DGX,false

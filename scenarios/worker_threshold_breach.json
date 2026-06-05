@@ -1,0 +1,14 @@
+{
+  "scenario_name": "worker_threshold_breach",
+  "config": {
+    "alpha": 1.0,
+    "beta": 1.0,
+    "gamma": 1.0,
+    "threshold": 10.0
+  },
+  "metrics": {
+    "context_bloat": 6.0,
+    "error_rate": 4.0,
+    "coordination_debt": 2.0
+  }
+}

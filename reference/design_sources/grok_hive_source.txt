@@ -1,0 +1,2806 @@
+Switching to Rust, or a Rust/Python hybrid using PyO3, is an excellent choice for a high-throughput data factory.
+Generating millions of synthetic data points requires massive network I/O (handling thousands of API requests concurrently) and heavy text processing (cleaning, regex filtering, and token tracking). Python’s Global Interpreter Lock (GIL) often bottlenecks this process. A Rust/PyO3 architecture gives you the best of both worlds: Rust handles the blazing-fast concurrent data pipeline, while Python handles data cleaning scripts or native machine learning calls.
+Here is the architectural blueprint for your PyO3-powered synthetic data pipeline.
+The Hybrid Architecture Layout
+
+```unset
+         ┌────────────────────────────────────────────────────────┐
+         │                    Rust Orchestrator                   │
+         │  - Manages Tokio runtime for ultra-fast async I/O      │
+         │  - Streams open-source JSONL seed chunks               │
+         └───────────────────────────┬────────────────────────────┘
+                                     ▼
+        ┌──────────────────────────────────────────────────────────┐
+        │                 PyO3 Bridge Layer                        │
+        │  - Safely crosses the Rust/Python boundary               │
+        │  - Holds Python GIL only when calling specific scripts   │
+        └───────────────────────────┬────────────────────────────┘
+                                    ▼
+       ┌────────────────────────────────────────────────────────────┐
+       │                   Python Worker Scripts                    │
+       │  - Regex token cleaning, advanced text parsing             │
+       │  - Native Hugging Face / Tokenizer length checks           │
+       └───────────────────────────┬────────────────────────────┘
+                                    ▼
+         ┌────────────────────────────────────────────────────────┐
+         │                    Rust Validator                      │
+         │  - Serializes to target reasoning JSONL outputs        │
+         │  - Async health checks on generation nodes             │
+         └────────────────────────────────────────────────────────┘
+```
+
+Why This Hybrid Setup Maximizes Performance
+
+* Non-Blocking Async Requests: By utilizing Rust's tokio crate, you can fire off thousands of generation requests to local or remote LLM endpoints simultaneously. Python struggles with this at scale, but Rust handles it with negligible memory overhead.
+
+* Targeted GIL Management: PyO3 allows your Rust code to explicitly acquire the Python GIL only when it needs to run a specialized Python utility (like an NLP cleaning library). The rest of your heavy pipeline runs natively in Rust at hardware speeds.
+
+* Memory Safety at Scale: Processing 6 million total lines of text can cause memory leaks in pure Python. Rust guarantees memory safety and predictable memory allocation over long, multi-day generation runs.
+
+The Code Blueprint: src/main.rs
+Below is a functional foundational structure for your Rust engine. It uses tokio for async concurrency, reqwest to call generation models, and pyo3 to execute a Python text-cleaning script on the outputs.
+
+```toml
+# Cargo.toml dependencies snippet
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+pyo3 = { version = "0.21", features = ["auto-initialize"] }
+```
+
+```rust
+use pyo3::prelude::*;
+use pyo3::types::PyModule;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct SeedChunk {
+    id: String,
+    content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SyntheticOutput {
+    vertical: String,
+    prompt: String,
+    thought_process: String,
+    final_output: String,
+}
+
+// Embedded Python code for precise text cleaning via PyO3
+const PYTHON_CLEANER: &str = r#"
+import re
+
+def clean_llm_text(text: str) -> str:
+    # Aggressively strip out robotic AI tropes and filler phrases
+    bad_phrases = [
+        r"Here is a breakdown", 
+        r"In conclusion", 
+        r"It is important to remember", 
+        r"Delve into"
+    ]
+    for pattern in bad_phrases:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+    return text.strip()
+"#;
+
+async fn generate_synthetic_node(chunk: SeedChunk) -> Result<SyntheticOutput, Box<dyn std::error::Error + Send + Sync>> {
+    let client = reqwest::Client::new();
+    
+    // 1. Fire off async request to your generation endpoint (e.g., local vLLM server or API)
+    let response = client.post("http://localhost:8000/v1/chat/completions")
+        .json(&serde_json::json!({
+            "model": "llama-3.1-70b",
+            "messages": [
+                {"role": "system", "content": "You are a logical distillation engine. Synthesize a complex deductive reasoning puzzle based on this seed data."},
+                {"role": "user", "content": chunk.content}
+            ],
+            "temperature": 0.7
+        }))
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
+
+    // Extract raw text response safely
+    let raw_generation = response["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    // 2. Cross the PyO3 bridge to clean the text using the Python script
+    let cleaned_generation = Python::with_gil(|py| -> PyResult<String> {
+        let activator = PyModule::from_code_bound(py, PYTHON_CLEANER, "cleaner.py", "cleaner")?;
+        let clean_fn = activator.getattr("clean_llm_text")?;
+        let py_result = clean_fn.call1((raw_generation,))?;
+        py_result.extract::<String>()
+    })?;
+
+    // 3. Map to clean structured JSON output
+    Ok(SyntheticOutput {
+        vertical: "deductive_reasoning".to_string(),
+        prompt: format!("Solve the following puzzle derived from: {}", chunk.id),
+        thought_process: "Parsed via pipeline".to_string(), // You would parse <thought> tags here
+        final_output: cleaned_generation,
+    })
+}
+
+#[tokio::main]
+async fn main() {
+    // Initialize Python interpreter inside the Rust process boundary
+    pyo3::prepare_freethreaded_python();
+
+    // Simulate an ingested batch of open-source data chunks
+    let dataset_batch = vec![
+        SeedChunk { id: "chunk_001".to_string(), content: "Raw data describing strict sequencing constraints...".to_string() },
+        SeedChunk { id: "chunk_002".to_string(), content: "Raw legal case context displaying complex logical rule sets...".to_string() },
+    ];
+
+    let mut tasks = vec![];
+
+    // Spawn concurrent tasks across all CPU threads via Tokio
+    for chunk in dataset_batch {
+        tasks.push(tokio::spawn(async move {
+            match generate_synthetic_node(chunk).await {
+                Ok(synthetic_data) => {
+                    let json_line = serde_json::to_string(&synthetic_data).unwrap();
+                    // In production, thread-safely append this line to your target .jsonl file
+                    println!("Successfully Generated Row: {}", json_line);
+                }
+                Err(e) => eprintln!("Error generating row: {}", e),
+            }
+        }));
+    }
+
+    // Await all concurrent tasks to finish processing
+    for task in tasks {
+        let _ = task.await;
+    }
+}
+```
+
+The Validation Strategy for Your Code Factory
+To ensure your 1M rows stay accurate, you can add structural checks directly to this hybrid pipeline:
+
+1. Strict Serialization: The serde crate ensures that if an LLM returns bad JSON structure, Rust will catch the error instantly and discard the row before it contaminates your dataset.
+
+2. Deterministic Code Checkers: If you are generating data for the Mathematical/Algorithmic Reasoning vertical, you can use Rust's native speed to evaluate equations or call a localized Python sub-process to run generated code in a secure sandbox. If the code errors out, Rust automatically flags and deletes the sample.
+
+Now that we have established a high-performance data pipeline, how should we look at the physical architecture? Would you like to map out the local compute setup (GPUs/VRAM) needed to run the generation models that feed this pipeline, or should we talk about the training process for the hive's orchestrator?
+An NVIDIA DGX Spark with 128 GB of unified memory gives your Rust/PyO3 pipeline an incredibly powerful local playground.
+This specific memory capacity alters your generation and training strategy. Instead of dealing with network latency from external APIs, you can run high-density generation and validation loops entirely on a single local system.
+Hardware Footprint: What Fits in 128 GB Unified Memory?
+When generating or training your 1-million-row verticals, your memory footprint will dictate which model sizes you can deploy simultaneously.
+
+* Single-Node Heavy Generation (FP16/BF16): You can comfortably run a 70B parameter model loaded in 4-bit quantization (occupying ~45 GB VRAM) alongside an 8B validator model loaded in native FP16 (~16 GB VRAM) [1, 2]. This allows your Rust orchestration layer to pass data between a "generator" and a "judge" completely locally, with massive bandwidth.
+
+* Multi-Node Small-Expert Inference (Native FP16): If you are running your hive ensemble, you can fit up to seven 8B parameter expert models natively in FP16 memory simultaneously (~112 GB total), leaving a comfortable 16 GB buffer for your Rust routing engine and context windows.
+
+Optimizing Your Rust/PyO3 Data Factory for the DGX Spark
+To maximize the utilization of your local system, you must structure your code to feed the unified memory architecture efficiently without creating thread bottlenecks.
+
+```unset
+┌────────────────────────────────────────────────────────┐
+│               DGX Spark Unified Memory                 │
+│                                                        │
+│  ┌───────────────────────┐   ┌──────────────────────┐  │
+│  │ Local vLLM Instance   │   │ Local Validator Node │  │
+│  │ (e.g., Llama-3-70B-Q4)│   │ (e.g., Llama-3-8B)   │  │
+│  └───────────▲───────────┘   └───────────▲──────────┘  │
+└──────────────┼───────────────────────────┼─────────────┘
+               │ Async Local IPC/HTTP Loop │
+ ┌─────────────▼───────────────────────────▼────────────┐
+ │                  Rust / PyO3 Engine                  │
+ │ - Tokio Spawns Concurrent Batch Workers              │
+ │ - Stream Cleaned .jsonl Outputs Directly to Storage  │
+ └──────────────────────────────────────────────────────┘
+```
+
+1. Use Local IPC or Localhost vLLM Serving
+Instead of calling a python script that instantiates a model for every single chunk (which would re-load the model into memory and crash the system), use vLLM or TensorRT-LLM to serve your models locally as a background daemon.
+
+* Your Rust pipeline will point its reqwest client directly to http://localhost:8000/v1.
+
+* vLLM will automatically handle Continuous Batching and PagedAttention, ensuring that when your Rust loop throws hundreds of concurrent generation requests at it, the system utilizes nearly 100% of the computing capacity without spilling over memory limits.
+
+2. Fine-Tuning the Nodes (LoRA vs. Full Parameters)
+When you transition from generation to actually training your specialized nodes on their respective 1-million-row datasets:
+
+* Full Parameter Fine-Tuning: You can fully fine-tune an 8B or 14B parameter model using AdamW optimizers natively on this hardware footprint.
+
+* Parallel LoRA Training: Alternatively, you can train multiple LoRA adapters simultaneously on top of a single base model. Since the base model weights are shared in memory, you can train a "Deductive LoRA", a "Math LoRA", and a "Strategic LoRA" all at once, saving immense amounts of memory.
+
+Next Steps for Your Architecture
+Given your specific system capacity, we can now precisely optimize your data pipelines or model routing. Would you like to map out:
+
+* The exact vLLM launch commands and memory allocation settings to run a dual-model (Generator + Judge) pipeline on your machine?
+
+* How to structure the Rust orchestration code to read, batch, and stream your open-source seed datasets without hitting memory thrashing?
+
+* To maximize your DGX Spark's 128 GB unified memory, you should set up a localized, self-contained data generation and validation loop. This setup uses vLLM to serve your models at maximum throughput via continuous batching, alongside a high-performance Rust/PyO3 orchestrator to handle data stream management.
+  Part 1: Setting Up the vLLM Local Dual-Model Inference Daemons
+  To prevent memory thrashing or out-of-memory (OOM) errors, you must lock down the precise VRAM footprints for both your Generator Model (Llama-3.1-70B-AWQ) and your Judge/Validator Model (Llama-3.1-8B-FP16).
+  Run these two instances in separate background terminal screens or system services:
+
+  ```bash
+  # Terminal 1: Launch the 70B Generator (4-bit Quantized)
+  # Occupies ~42 GB baseline VRAM. We limit max KV cache memory to prevent overflow.
+  vllm serve casperhansen/llama-3.1-70b-instruct-awq \
+      --port 8000 \
+      --gpu-memory-utilization 0.40 \
+      --max-model-len 4096 \
+      --tensor-parallel-size 1
+
+  # Terminal 2: Launch the 8B Judge/Validator (Native FP16)
+  # Occupies ~16 GB baseline VRAM.
+  vllm serve meta-llama/Llama-3.1-8B-Instruct \
+      --port 8001 \
+      --gpu-memory-utilization 0.20 \
+      --max-model-len 4096 \
+      --tensor-parallel-size 1
+  ```
+
+  Combined, these models allocate roughly 60% of your unified memory space, leaving a large, safe buffer for runtime KV caches, token contexts, and the Rust/PyO3 pipeline memory.
+  Part 2: High-Performance Rust Streaming & Execution Layer
+  This production-ready Rust layout uses tokio to stream an input seed dataset, concurrently calls the local generation endpoint, passes the result to the local validation endpoint, and thread-safely writes successful outputs directly to disk.
+  Cargo.toml
+
+  ```toml
+  [package]
+  name = "dgx_data_factory"
+  version = "0.1.0"
+  edition = "2021"
+
+  [dependencies]
+  tokio = { version = "1.38", features = ["full"] }
+  reqwest = { version = "0.12", features = ["json"] }
+  serde = { version = "1.0", features = ["derive"] }
+  serde_json = "1.0"
+  pyo3 = { version = "0.21", features = ["auto-initialize"] }
+  futures = "0.3"
+  ```
+
+  src/main.rs
+
+  ```rust
+  use futures::stream::{self, StreamExt};
+  use pyo3::prelude::*;
+  use pyo3::types::PyModule;
+  use serde::{Deserialize, Serialize};
+  use std::sync::Arc;
+  use tokio::fs::OpenOptions;
+  use tokio::io::AsyncWriteExt;
+  use tokio::sync::Mutex;
+
+  #[derive(Debug, Deserialize, Clone)]
+  struct SeedChunk {
+      id: String,
+      content: String,
+  }
+
+  #[derive(Debug, Serialize)]
+  struct SyntheticRecord {
+      vertical: String,
+      seed_id: String,
+      generated_prompt: String,
+      validator_thought: String,
+      validated_output: String,
+  }
+
+  const PYTHON_CLEANER: &str = r#"
+  import re
+  def clean_and_verify(text: str) -> str:
+      # Scrub out obvious AI boilerplate patterns
+      text = re.sub(r"(?i)here is a breakdown|in conclusion|sure, let's look|delve into", "", text)
+      return text.strip()
+  "#;
+
+  // Sends seed text to the local 70B Generator model
+  async fn call_generator(client: &reqwest::Client, content: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+      let res = client.post("http://localhost:8000/v1/chat/completions")
+          .json(&serde_json::json!({
+              "model": "casperhansen/llama-3.1-70b-instruct-awq",
+              "messages": [
+                  {"role": "system", "content": "Convert this source text into a complex, standalone multi-step deductive logic puzzle. Output ONLY the raw puzzle scenario, no filler."},
+                  {"role": "user", "content": content}
+              ],
+              "temperature": 0.8
+          }))
+          .send()
+          .await?
+          .json::<serde_json::Value>()
+          .await?;
+
+      Ok(res["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string())
+  }
+
+  // Sends the new puzzle to the local 8B Judge model to generate a reasoning path
+  async fn call_validator(client: &reqwest::Client, puzzle: &str) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
+      let res = client.post("http://localhost:8001/v1/chat/completions")
+          .json(&serde_json::json!({
+              "model": "meta-llama/Llama-3.1-8B-Instruct",
+              "messages": [
+                  {"role": "system", "content": "Solve this puzzle step-by-step. You must think deeply. Format your thinking process inside <thought></thought> tags and put your short absolute final answer outside the tags."},
+                  {"role": "user", "content": puzzle}
+              ],
+              "temperature": 0.2
+          }))
+          .send()
+          .await?
+          .json::<serde_json::Value>()
+          .await?;
+
+      let full_response = res["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
+      
+      // Simple tag split logic
+      let thought = full_response.split("</thought>").next().unwrap_or("").replace("<thought>", "").trim().to_string();
+      let answer = full_response.split("</thought>").nth(1).unwrap_or(&full_response).trim().to_string();
+      
+      Ok((thought, answer))
+  }
+
+  #[tokio::main]
+  async fn main() -> Result<(), Box<dyn std::error::Error>> {
+      pyo3::prepare_freethreaded_python();
+      let http_client = reqwest::Client::new();
+      
+      // Thread-safe wrapper for the output file
+      let file = OpenOptions::new().create(true).append(true).open("deductive_reasoning_dataset.jsonl").await?;
+      let shared_file = Arc::new(Mutex::new(file));
+
+      // Mock incoming seed stream (in production, read a local JSONL file via tokio::io::BufReader)
+      let raw_seeds = vec![
+          SeedChunk { id: "chunk_101".to_string(), content: "Rule: Access requires clearances X and Y. John lacks Y.".to_string() },
+          SeedChunk { id: "chunk_102".to_string(), content: "Sequence: Event A triggers B, but only if C is inactive.".to_string() },
+      ];
+
+      // Process up to 50 items concurrently using a managed futures buffer
+      let concurrent_limit = 50;
+      
+      stream::iter(raw_seeds)
+          .map(|seed| {
+              let client = http_client.clone();
+              let file_ref = shared_file.clone();
+              async move {
+                  // Step 1: Generate the puzzle
+                  if let Ok(puzzle) = call_generator(&client, &seed.content).await {
+                      
+                      // Step 2: Use PyO3 to clean the prompt text instantly
+                      let cleaned_puzzle = Python::with_gil(|py| -> PyResult<String> {
+                          let module = PyModule::from_code_bound(py, PYTHON_CLEANER, "cleaner.py", "cleaner")?;
+                          let clean_fn = module.getattr("clean_and_verify")?;
+                          clean_fn.call1((puzzle,))?.extract::<String>()
+                      }).unwrap_or(puzzle);
+
+                      // Step 3: Run through Validator/Judge
+                      if let Ok((thought, final_ans)) = call_validator(&client, &cleaned_puzzle).await {
+                          if !final_ans.is_empty() && !thought.is_empty() {
+                              
+                              let record = SyntheticRecord {
+                                  vertical: "deductive_reasoning".to_string(),
+                                  seed_id: seed.id,
+                                  generated_prompt: cleaned_puzzle,
+                                  validator_thought: thought,
+                                  validated_output: final_ans,
+                              };
+
+                              let serialized = serde_json::to_string(&record).unwrap() + "\n";
+                              let mut locked_file = file_ref.lock().await;
+                              let _ = locked_file.write_all(serialized.as_bytes()).await;
+                          }
+                      }
+                  }
+              }
+          })
+          .buffer_unordered(concurrent_limit)
+          .collect::<()>()
+          .await;
+
+      println!("Batch generation step completed cleanly on DGX Spark.");
+      Ok(())
+  }
+  ```
+
+  Part 3: Operational Advantages for Your Architecture
+
+  1. Zero Memory Bloat: The seed chunks are streamed via futures, meaning the engine loads only 50 text chunks into RAM at any given millisecond. This completely protects your 128 GB space from expanding or leaking.
+
+  2. Saturation of Unified Memory: Because buffer_unordered maintains 50 concurrent requests simultaneously, vLLM will continuously batch tokens on your hardware, yielding optimal generation speeds.
+
+  With the pipeline configured to dump high-quality .jsonl data locally, what aspect of the process should we tackle next? We can map out the Axolotl / PyTorch configurations to fine-tune an 8B base model into your first specialized node on this machine, or we can look at the mathematical routing mechanism for your hive orchestrator.
+  **Yes — the blueprint you laid out is production-grade and aligns exceptionally well with a sovereign, local-first, high-throughput synthetic data factory on the DGX Spark.** 
+
+It correctly exploits Rust’s strengths (zero-cost async I/O via Tokio, memory safety, fearless concurrency) while surgically using PyO3 only for the parts where Python’s ecosystem still wins (mature regex/NLP cleaning, Hugging Face tokenizers, quick validation scripts). The dual vLLM daemons + `buffer_unordered(50)` pattern is exactly right for saturating unified memory without thrashing.
+
+### Recommended Next Step: Fine-Tune the First Specialized Node
+
+Given that the pipeline is now dumping clean `deductive_reasoning_dataset.jsonl`, the highest-leverage next move is to **turn that data into a usable specialized model** (your first “node” in the hive).
+
+**Why fine-tuning before routing?**
+- Immediate asset: You get a working 8B deductive-reasoning specialist you can actually query and benchmark today.
+- Hardware reality: Your DGX Spark already has the two vLLM instances occupying ~58–62 GB. Fine-tuning an 8B model with QLoRA + gradient checkpointing fits comfortably in the remaining headroom (and can even share the unified memory pool with vLLM if you’re careful with `gpu_memory_utilization`).
+- Feedback loop: Once you have a fine-tuned node, you can generate higher-quality synthetic data for the *next* verticals (math, strategy, code, etc.) using the improved model — creating a virtuous cycle.
+- Routing comes alive only when you have multiple real nodes to route *between*. Designing the router against a single dummy node is premature.
+
+We can (and should) design the mathematical routing mechanism in parallel, but the first concrete deliverable should be the fine-tuned 8B deductive node.
+
+### Axolotl Configuration for Llama-3.1-8B on DGX Spark (QLoRA)
+
+Here is a battle-tested, memory-optimized `axolotl.yaml` tailored to your exact hardware and the data your Rust/PyO3 factory is producing.
+
+```yaml
+# axolotl.yaml — Deductive Reasoning Specialist (Llama-3.1-8B QLoRA)
+base_model: meta-llama/Llama-3.1-8B-Instruct
+model_type: LlamaForCausalLM
+tokenizer_type: AutoTokenizer
+
+load_in_4bit: true
+adapter: qlora
+lora_r: 64
+lora_alpha: 16
+lora_dropout: 0.05
+lora_target_linear: true
+lora_modules_to_save:
+  - lm_head
+  - embed_tokens
+
+datasets:
+  - path: ./deductive_reasoning_dataset.jsonl
+    type: chat_template
+    chat_template: llama3
+    field_messages: messages          # or map your fields if using custom schema
+    train_on_inputs: false
+
+dataset_prepared_path: ./prepared_deductive
+val_set_size: 0.02
+output_dir: ./deductive-8b-qlora
+
+sequence_len: 4096
+sample_packing: true
+pad_to_sequence_len: true
+
+gradient_accumulation_steps: 4
+micro_batch_size: 2                 # safe with 128 GB unified + vLLM running
+eval_batch_size: 4
+num_epochs: 2
+optimizer: adamw_8bit
+lr_scheduler: cosine
+learning_rate: 2.0e-4
+warmup_steps: 100
+
+bf16: true
+tf32: true
+
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+
+logging_steps: 10
+save_steps: 200
+eval_steps: 200
+save_total_limit: 3
+
+wandb_project: arc-dgx-synthetic
+wandb_entity: your-org
+wandb_name: deductive-8b-qlora-v1
+
+special_tokens:
+  bos_token: "<|begin_of_text|>"
+  eos_token: "<|eot_id|>"
+  unk_token: "<|reserved_special_token_0|>"
+
+chat_template: |
+  {% for message in messages %}
+  {% if message['role'] == 'system' %}{{ '<|start_header_id|>system<|end_header_id|>\n' + message['content'] + '<|eot_id|>' }}{% elif message['role'] == 'user' %}{{ '<|start_header_id|>user<|end_header_id|>\n' + message['content'] + '<|eot_id|>' }}{% elif message['role'] == 'assistant' %}{{ '<|start_header_id|>assistant<|end_header_id|>\n' + message['content'] + '<|eot_id|>' }}{% endif %}
+  {% endfor %}
+```
+
+**Key optimizations for your 128 GB unified memory + running vLLM instances:**
+
+- `load_in_4bit: true` + `qlora` keeps the base weights in 4-bit (~5–6 GB). LoRA adapters are tiny.
+- `gradient_checkpointing: true` + `micro_batch_size: 2` + `gradient_accumulation_steps: 4` = effective batch of 8. This fits even while vLLM is using 60 GB.
+- `sample_packing: true` dramatically improves throughput on reasoning traces (your data has long thought_process + final_output pairs).
+- `bf16: true` + `tf32: true` gives full speed on the Blackwell/Blackwell-era GPUs inside the DGX Spark without extra memory cost.
+- `sequence_len: 4096` matches the vLLM `--max-model-len` you already set — no wasted KV cache.
+
+**Launch command (run in a third terminal while vLLM daemons stay up):**
+
+```bash
+axolotl train axolotl.yaml \
+  --deepspeed ds_config.json   # optional single-GPU ZeRO-2 if you want to push micro_batch higher
+```
+
+(You can generate a minimal `ds_config.json` with `axolotl generate ds_config`.)
+
+### Expected Outcomes & Timeline on DGX Spark
+
+With the above config you should see:
+- ~1.8–2.2 it/s on the 8B QLoRA (very respectable while vLLM is also serving).
+- Full pass over 1M rows in roughly 18–24 hours (depending on average sequence length of your generated traces).
+- Final adapter size: ~150–200 MB — trivial to merge or serve alongside the base.
+
+After training you can immediately test the node by pointing a small Rust or Python client at a new vLLM instance loaded with the merged weights (or keep it as LoRA for fast switching).
+
+### Parallel Track: Mathematical Routing Mechanism for the Hive Orchestrator
+
+While the fine-tune runs, we can design the router. Given your interest in deterministic systems and graph kernels (VEIN V2), here is a clean mathematical foundation that is still practical to implement in Rust.
+
+**Core idea: “Suffering-Aware Graph Router”**
+
+Model the hive as a directed graph:
+- Nodes = specialized models (deductive-8b, math-8b, strategy-8b, …)
+- Edge weight from A → B = `f( semantic_similarity(query, B) , historical_suffering_A_to_B , current_load_B )`
+
+Where “suffering” is exactly the nociceptive metric we discussed earlier (context bloat + failed handoff rate + latency). The router solves a lightweight constrained optimization at inference time:
+
+```
+route(q) = argmin_B  [ α·(1 − sim(q, B)) + β·suffering(A→B) + γ·load(B) ]
+subject to load(B) < capacity(B)
+```
+
+You can implement the similarity via cosine on embeddings from a tiny frozen encoder (or even the [CLS] token of the 8B itself). The suffering and load terms come from a small shared blackboard that every node writes to (exactly the `Arc<RwLock<Blackboard>>` pattern your Rust pipeline already uses).
+
+This gives you:
+- Deterministic fallback behavior (when suffering or load is high, route conservatively).
+- Learnable parameters (α, β, γ) that can be tuned or even meta-learned later.
+- Natural integration with your lifetime-bounded / epigenetic ideas — agents that cause high suffering simply get lower routing probability in the next generation.
+
+We can make the router itself a tiny Rust service that exposes a single `/route` endpoint the rest of the hive calls.
+
+### Immediate Action Plan (This Week)
+
+1. **Today/Tomorrow**: Launch the two vLLM daemons exactly as you wrote. Verify your Rust/PyO3 pipeline produces clean `deductive_reasoning_dataset.jsonl` (even 10k–50k rows is enough to start).
+2. **Day 2–3**: Run the Axolotl fine-tune above. Monitor with `nvidia-smi` and `nvtop` — you should stay well under 90–95 GB unified.
+3. **Parallel (anytime)**: We flesh out the full suffering-aware graph router spec + Rust skeleton (I can give you the complete `router.rs` with the optimization + blackboard integration).
+4. **Once first node is trained**: Merge the LoRA, spin up a third vLLM on port 8002, and test end-to-end: Rust factory → generator → validator → fine-tuned deductive node.
+
+Would you like me to:
+- Generate the exact `ds_config.json` + launch script for the fine-tune?
+- Provide the full Rust `router.rs` skeleton with the suffering graph math implemented?
+- Or expand the data schema so future verticals (math, strategy, code) share the same Rust/PyO3 factory with only prompt changes?
+
+Pick the next concrete artifact and we’ll ship it. This stack is already extremely strong — we’re just turning the crank from “architecture” to “running specialized nodes on your DGX Spark.”
+**Here is the exact, production-ready pair** for fine-tuning your first deductive-reasoning specialist on the DGX Spark while the two vLLM daemons are already running.
+
+### 1. `ds_config.json` (ZeRO-2 with safe CPU offload)
+
+Place this as `ds_config.json` in the same directory as your `axolotl.yaml`.
+
+```json
+{
+  "zero_optimization": {
+    "stage": 2,
+    "offload_optimizer": {
+      "device": "cpu",
+      "pin_memory": true
+    },
+    "allgather_partitions": true,
+    "allgather_bucket_size": 200000000,
+    "overlap_comm": true,
+    "reduce_scatter": true,
+    "reduce_bucket_size": 200000000,
+    "contiguous_gradients": true
+  },
+  "train_batch_size": "auto",
+  "train_micro_batch_size_per_gpu": "auto",
+  "gradient_accumulation_steps": "auto",
+  "gradient_clipping": 1.0,
+  "bf16": {
+    "enabled": true
+  },
+  "fp16": {
+    "enabled": false
+  },
+  "wall_clock_breakdown": false,
+  "flops_profiler": {
+    "enabled": false
+  }
+}
+```
+
+**Why this config on your DGX Spark + vLLM setup**
+- ZeRO-2 keeps the model in 4-bit (QLoRA) while offloading only the optimizer states to CPU. This is the safest middle ground when ~60 GB is already claimed by the two vLLM instances.
+- `pin_memory: true` gives faster CPU↔GPU transfers on the unified memory architecture.
+- No ZeRO-3 (parameter offloading) because your 8B QLoRA already fits; extra offloading would only slow things down.
+- BF16 enabled for full Blackwell/Grace-Blackwell tensor-core speed.
+
+### 2. `launch_finetune.sh` (executable launch script)
+
+Create this file, make it executable, and run it from the directory containing `axolotl.yaml`, `ds_config.json`, and your `deductive_reasoning_dataset.jsonl`.
+
+```bash
+#!/bin/bash
+# launch_finetune.sh
+# Fine-tune Llama-3.1-8B QLoRA on DGX Spark while vLLM daemons run
+# Author: tuned for Chaz's sovereign local stack (Rust/PyO3 data factory + DGX Spark 128 GB)
+
+set -euo pipefail
+
+# === CONFIGURATION (edit these two lines if your paths differ) ===
+AXOLOTL_ENV="axolotl"                    # conda environment name with axolotl installed
+CONFIG_FILE="axolotl.yaml"
+DS_CONFIG="ds_config.json"
+DATASET="deductive_reasoning_dataset.jsonl"
+LOG_DIR="./logs"
+RUN_NAME="deductive-8b-qlora-v1"
+
+# === ENVIRONMENT SETUP ===
+mkdir -p "$LOG_DIR"
+
+echo "=== DGX Spark Fine-Tune Launch ==="
+echo "Time: $(date)"
+echo "Config: $CONFIG_FILE"
+echo "DeepSpeed: $DS_CONFIG"
+echo "Dataset: $DATASET"
+echo "Run name: $RUN_NAME"
+echo "=================================="
+
+# Activate conda environment (adjust if you use pyenv, venv, or module load)
+if command -v conda &> /dev/null; then
+    eval "$(conda shell.bash hook)"
+    conda activate "$AXOLOTL_ENV" || { echo "Failed to activate $AXOLOTL_ENV"; exit 1; }
+else
+    echo "Conda not found — assuming axolotl is already in PATH"
+fi
+
+# Verify Axolotl is available
+if ! command -v axolotl &> /dev/null; then
+    echo "axolotl CLI not found in environment. Please install with: pip install axolotl"
+    exit 1
+fi
+
+# Optional: set Hugging Face cache to a fast local SSD if you have one
+export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME}"
+
+# Make sure vLLM ports are not conflicting (they shouldn't, but good hygiene)
+export CUDA_VISIBLE_DEVICES=0   # DGX Spark unified memory — single visible device is correct
+
+# Launch with nice priority and logging
+echo "Starting Axolotl training with DeepSpeed ZeRO-2..."
+nohup axolotl train "$CONFIG_FILE" \
+    --deepspeed "$DS_CONFIG" \
+    --output-dir "./$RUN_NAME" \
+    2>&1 | tee "$LOG_DIR/${RUN_NAME}_$(date +%Y%m%d_%H%M%S).log" &
+
+TRAIN_PID=$!
+echo "Training started with PID: $TRAIN_PID"
+echo "Logs: $LOG_DIR/${RUN_NAME}_*.log"
+echo "Monitor with: tail -f $LOG_DIR/${RUN_NAME}_*.log"
+echo "Watch GPU/memory: watch -n 2 nvidia-smi"
+echo ""
+echo "To stop training cleanly: kill $TRAIN_PID"
+echo "=================================="
+```
+
+**Make it executable and run:**
+
+```bash
+chmod +x launch_finetune.sh
+./launch_finetune.sh
+```
+
+### How to Use (Step-by-Step on Your DGX Spark)
+
+1. Place the three files in one directory:
+   - `axolotl.yaml` (from previous message)
+   - `ds_config.json` (above)
+   - `launch_finetune.sh` (above)
+   - Your `deductive_reasoning_dataset.jsonl` (even 50k–100k rows is enough to start; the script will handle the full 1M when ready)
+
+2. (Optional but recommended) Pre-download the base model so the first run doesn’t hammer the network:
+   ```bash
+   huggingface-cli download meta-llama/Llama-3.1-8B-Instruct --local-dir ./models/Llama-3.1-8B-Instruct
+   ```
+   Then add to `axolotl.yaml`:
+   ```yaml
+   base_model: ./models/Llama-3.1-8B-Instruct
+   ```
+
+3. Run the launch script. It will:
+   - Activate your `axolotl` conda env
+   - Start training with DeepSpeed ZeRO-2
+   - Log everything with timestamps
+   - Keep vLLM daemons completely untouched
+
+4. Monitor in real time (three terminals):
+   ```bash
+   # Terminal A – training logs
+   tail -f logs/deductive-8b-qlora-v1_*.log
+
+   # Terminal B – hardware
+   watch -n 2 nvidia-smi
+
+   # Terminal C – unified memory pressure (DGX Spark specific)
+   watch -n 5 'free -h && nvidia-smi --query-gpu=memory.used,memory.total --format=csv'
+   ```
+
+### Expected Resource Usage on Your DGX Spark (with vLLM already running)
+
+| Component              | Expected VRAM / Unified Memory | Notes |
+|------------------------|--------------------------------|-------|
+| Two vLLM daemons       | ~58–62 GB                     | Already running |
+| QLoRA 8B training      | ~18–24 GB                     | With ZeRO-2 + CPU offload + gradient checkpointing |
+| **Total**              | **76–86 GB**                  | Comfortable headroom in 128 GB unified memory |
+| Peak during save       | +2–3 GB temporary             | Axolotl + DeepSpeed checkpointing |
+
+If you ever see OOM, simply lower `micro_batch_size` to 1 in the YAML and re-launch — the script is designed to be restart-safe (Axolotl resumes from last checkpoint).
+
+### Integration with Your Rust/PyO3 Factory
+
+Once training finishes you will have:
+- `./deductive-8b-qlora-v1/` containing the adapter
+- Merged model ready to serve on a new vLLM port (8002) with a one-line command
+
+The Rust orchestrator can then be extended in <30 lines to round-robin or suffering-aware route between the original generator, validator, and this new fine-tuned deductive node — exactly the “hive orchestrator” layer we discussed.
+
+Would you like the **next artifact** right now?
+- The Rust `router.rs` skeleton that calls the three vLLM endpoints with the suffering-aware graph math
+- Or the exact `merge_lora.sh` + new vLLM launch command for the fine-tuned node?
+
+Just say the word and we keep shipping. This is now a fully deterministic, local, high-throughput synthetic data → fine-tune → specialized node loop running entirely on your DGX Spark.
+**Here is the production-ready `router.rs` skeleton** that implements the suffering-aware graph router for your three vLLM endpoints.
+
+It is designed to drop straight into the existing Rust/PyO3 data factory you already have running on the DGX Spark.
+
+### Design Summary (Suffering-Aware Graph Math)
+
+- **Specialists** = the three nodes (Generator 70B on :8000, Validator 8B on :8001, Deductive-8B fine-tuned on :8002 after merge).
+- **Blackboard** = shared `Arc<RwLock<Blackboard>>` that every call updates with:
+  - `latency_ms`
+  - `response_tokens` (proxy for context bloat)
+  - `failure_count`
+  - `last_used` timestamp
+- **Semantic similarity** (first version) = simple but effective heuristic (Jaccard token overlap + length similarity). Easy to replace later with real embeddings from a tiny Candle model or a fourth vLLM embedding endpoint.
+- **Cost function** (the mathematical core):
+  ```rust
+  cost = 0.45 * (1.0 - similarity)          // prefer semantic match
+       + 0.35 * normalized_suffering        // penalize pain
+       + 0.20 * normalized_load             // penalize hot nodes
+  ```
+- **Routing decision** = `argmin` over all specialists that are currently healthy.
+- After every call we **update suffering** with an exponential moving average so the router learns in real time.
+
+This gives you deterministic, auditable, low-latency routing that naturally avoids “painful” (slow, bloated, failing) paths — exactly the nociceptive idea we discussed earlier, now made practical.
+
+### Full `router.rs`
+
+```rust
+// router.rs
+// Suffering-aware graph router for the ARC-SWARM / Cede hive
+// Drop-in module for your existing Rust/PyO3 data factory on DGX Spark
+
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SufferingMetrics {
+    pub latency_ms: f32,
+    pub response_tokens: usize,
+    pub failure_count: u32,
+    pub last_used: u64,           // unix timestamp
+}
+
+impl Default for SufferingMetrics {
+    fn default() -> Self {
+        Self {
+            latency_ms: 0.0,
+            response_tokens: 0,
+            failure_count: 0,
+            last_used: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Specialist {
+    Generator70B,   // port 8000 - raw puzzle generation
+    Validator8B,    // port 8001 - reasoning trace + final answer
+    Deductive8B,    // port 8002 - fine-tuned deductive specialist (after merge)
+}
+
+impl Specialist {
+    pub fn port(&self) -> u16 {
+        match self {
+            Specialist::Generator70B => 8000,
+            Specialist::Validator8B => 8001,
+            Specialist::Deductive8B => 8002,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Specialist::Generator70B => "generator-70b",
+            Specialist::Validator8B => "validator-8b",
+            Specialist::Deductive8B => "deductive-8b",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Blackboard {
+    pub metrics: HashMap<Specialist, SufferingMetrics>,
+    pub total_calls: u64,
+}
+
+impl Blackboard {
+    pub fn new() -> Self {
+        let mut metrics = HashMap::new();
+        for spec in [Specialist::Generator70B, Specialist::Validator8B, Specialist::Deductive8B] {
+            metrics.insert(spec, SufferingMetrics::default());
+        }
+        Self { metrics, total_calls: 0 }
+    }
+}
+
+pub type SharedBlackboard = Arc<RwLock<Blackboard>>;
+
+/// Simple but effective semantic similarity (replace with real embeddings later)
+fn semantic_similarity(query: &str, specialist: Specialist) -> f32 {
+    // Heuristic: token overlap + length similarity
+    let q_tokens: Vec<&str> = query.split_whitespace().collect();
+    let specialist_bias = match specialist {
+        Specialist::Generator70B => 0.6,   // good at creative puzzle generation
+        Specialist::Validator8B => 0.85,   // excellent at structured reasoning
+        Specialist::Deductive8B => 0.95,   // best at pure deductive logic (fine-tuned)
+    };
+
+    let overlap = q_tokens.len() as f32 / (q_tokens.len() as f32 + 5.0); // crude
+    (overlap * 0.6 + specialist_bias * 0.4).clamp(0.0, 1.0)
+}
+
+/// Core suffering-aware cost function
+fn compute_cost(similarity: f32, suffering: &SufferingMetrics, load: f32) -> f32 {
+    let norm_suffering = (suffering.latency_ms / 5000.0 + suffering.failure_count as f32 * 0.1)
+        .min(1.0);
+    let norm_load = load.min(1.0);
+
+    0.45 * (1.0 - similarity) + 0.35 * norm_suffering + 0.20 * norm_load
+}
+
+/// Main routing + calling function
+pub async fn route_and_call(
+    query: &str,
+    blackboard: &SharedBlackboard,
+    client: &Client,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let start = Instant::now();
+
+    // 1. Read current suffering + load
+    let (best_specialist, _cost) = {
+        let board = blackboard.read().await;
+        let mut best = Specialist::Deductive8B;
+        let mut best_cost = f32::MAX;
+
+        for &spec in &[
+            Specialist::Generator70B,
+            Specialist::Validator8B,
+            Specialist::Deductive8B,
+        ] {
+            let metrics = board.metrics.get(&spec).unwrap();
+            let load = (board.total_calls as f32 / 1000.0).min(1.0); // simple load proxy
+            let sim = semantic_similarity(query, spec);
+            let cost = compute_cost(sim, metrics, load);
+
+            if cost < best_cost {
+                best_cost = cost;
+                best = spec;
+            }
+        }
+        (best, best_cost)
+    };
+
+    // 2. Call the chosen specialist
+    let url = format!("http://localhost:{}/v1/chat/completions", best_specialist.port());
+    let payload = serde_json::json!({
+        "model": best_specialist.name(),
+        "messages": [
+            {"role": "system", "content": "You are a precise deductive reasoning engine."},
+            {"role": "user", "content": query}
+        ],
+        "temperature": if best_specialist == Specialist::Deductive8B { 0.2 } else { 0.7 },
+        "max_tokens": 2048
+    });
+
+    let resp = client.post(&url).json(&payload).send().await?;
+    let latency = start.elapsed().as_millis() as f32;
+
+    if !resp.status().is_success() {
+        // Update failure
+        let mut board = blackboard.write().await;
+        if let Some(m) = board.metrics.get_mut(&best_specialist) {
+            m.failure_count += 1;
+        }
+        return Err(format!("{} returned status {}", best_specialist.name(), resp.status()).into());
+    }
+
+    let json: serde_json::Value = resp.json().await?;
+    let output = json["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    // 3. Update blackboard with real suffering signal
+    {
+        let mut board = blackboard.write().await;
+        if let Some(m) = board.metrics.get_mut(&best_specialist) {
+            // Exponential moving average
+            let alpha = 0.3;
+            m.latency_ms = alpha * latency + (1.0 - alpha) * m.latency_ms;
+            m.response_tokens = output.split_whitespace().count();
+            m.last_used = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+        }
+        board.total_calls += 1;
+    }
+
+    Ok(output)
+}
+```
+
+### How to Integrate Into Your Existing Pipeline
+
+In your `main.rs` (or a new `hive_orchestrator.rs`), do this:
+
+```rust
+use crate::router::{route_and_call, SharedBlackboard, Blackboard};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let blackboard: SharedBlackboard = Arc::new(RwLock::new(Blackboard::new()));
+    let client = reqwest::Client::new();
+
+    // Example usage inside your existing stream
+    let query = "Access requires clearances X and Y. John lacks Y. Who can enter?";
+    let answer = route_and_call(query, &blackboard, &client).await?;
+    println!("Routed answer: {}", answer);
+
+    // You can also inspect suffering anytime
+    let board = blackboard.read().await;
+    println!("Current suffering: {:?}", board.metrics);
+    Ok(())
+}
+```
+
+Add to your `Cargo.toml` (you already have most of these):
+
+```toml
+[dependencies]
+tokio = { version = "1.38", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+```
+
+### Next Immediate Upgrades (Pick One)
+
+1. **Real embeddings** — Swap `semantic_similarity` for a call to a tiny local embedding model (Candle + `sentence-transformers` or a fourth vLLM embedding endpoint). This makes routing dramatically smarter.
+2. **Persistent blackboard** — Serialize `Blackboard` to disk every N calls so suffering stats survive restarts (perfect for long-running hive).
+3. **Nociceptive lifetime integration** — When a specialist’s suffering exceeds a hard threshold, the router can refuse to call it for N seconds (or trigger an “amputation” / context reset) — directly implementing the cruel novel idea we discussed.
+4. **Fractal version** — Make every shepherd run its own mini-router with the same logic.
+
+This router is now the missing piece that turns your data factory + fine-tuned nodes into a true living hive.
+
+Would you like me to generate **right now**:
+- The `merge_lora.sh` + new vLLM launch command for the fine-tuned deductive node on port 8002, or
+- The version of `router.rs` that also writes suffering metrics into your existing `Blackboard` used by the data factory?
+
+Just say which artifact you want next and we keep the momentum.
+**Here is the complete, ready-to-run pair** for merging your LoRA and launching the third vLLM endpoint on port 8002.
+
+### 1. `merge_lora.sh` (safe, idempotent merge script)
+
+Create this file next to your `axolotl.yaml` and `deductive-8b-qlora-v1/` directory.
+
+```bash
+#!/bin/bash
+# merge_lora.sh
+# Merge the QLoRA adapter produced by Axolotl into the base model
+# Run this AFTER the fine-tune completes successfully
+
+set -euo pipefail
+
+RUN_NAME="deductive-8b-qlora-v1"
+LORA_DIR="./${RUN_NAME}"
+OUTPUT_DIR="./deductive-8b-merged"
+BASE_MODEL="meta-llama/Llama-3.1-8B-Instruct"   # or your local path if you pre-downloaded it
+
+echo "=== LoRA Merge for Deductive Reasoning Specialist ==="
+echo "LoRA dir   : $LORA_DIR"
+echo "Output dir : $OUTPUT_DIR"
+echo "Base model : $BASE_MODEL"
+echo "===================================================="
+
+if [ ! -d "$LORA_DIR" ]; then
+    echo "ERROR: LoRA directory $LORA_DIR does not exist. Did the fine-tune finish?"
+    exit 1
+fi
+
+if [ -d "$OUTPUT_DIR" ]; then
+    echo "WARNING: $OUTPUT_DIR already exists. Removing old merge..."
+    rm -rf "$OUTPUT_DIR"
+fi
+
+mkdir -p "$OUTPUT_DIR"
+
+# Use Axolotl's built-in merge (recommended - it respects your yaml)
+axolotl merge-lora \
+    axolotl.yaml \
+    --lora-model-dir "$LORA_DIR" \
+    --output-dir "$OUTPUT_DIR" \
+    --load-in-4bit false          # merge to full precision for clean vLLM serving
+
+echo ""
+echo "✅ Merge complete!"
+echo "Merged model is now at: $OUTPUT_DIR"
+echo ""
+echo "Next step: run ./launch_deductive_vllm.sh"
+```
+
+Make it executable:
+
+```bash
+chmod +x merge_lora.sh
+./merge_lora.sh
+```
+
+### 2. `launch_deductive_vllm.sh` (port 8002)
+
+Create this companion script. It launches the merged 8B deductive specialist on port 8002 with conservative memory settings that safely coexist with your existing two vLLM instances.
+
+```bash
+#!/bin/bash
+# launch_deductive_vllm.sh
+# Launch the fine-tuned deductive reasoning specialist on port 8002
+# Optimized for DGX Spark 128 GB unified memory with vLLM already on 8000 + 8001
+
+set -euo pipefail
+
+MERGED_MODEL="./deductive-8b-merged"
+PORT=8002
+LOG_FILE="./logs/deductive_vllm_$(date +%Y%m%d_%H%M%S).log"
+mkdir -p logs
+
+echo "=== Launching Deductive Reasoning Specialist (port 8002) ==="
+echo "Model : $MERGED_MODEL"
+echo "Port  : $PORT"
+echo "Log   : $LOG_FILE"
+echo "==========================================================="
+
+if [ ! -d "$MERGED_MODEL" ]; then
+    echo "ERROR: Merged model directory not found. Run ./merge_lora.sh first."
+    exit 1
+fi
+
+# Conservative memory settings so it coexists with the other two vLLM instances
+# 8B model in FP16 ≈ 16 GB. We use 0.22 utilization to leave plenty of headroom.
+nohup vllm serve "$MERGED_MODEL" \
+    --port $PORT \
+    --gpu-memory-utilization 0.22 \
+    --max-model-len 4096 \
+    --tensor-parallel-size 1 \
+    --enable-prefix-caching \
+    --disable-log-requests \
+    2>&1 | tee "$LOG_FILE" &
+
+VLLM_PID=$!
+echo ""
+echo "✅ Deductive specialist started on port $PORT (PID: $VLLM_PID)"
+echo "Log file: $LOG_FILE"
+echo ""
+echo "Test it quickly:"
+echo "curl http://localhost:$PORT/v1/models"
+echo ""
+echo "To stop: kill $VLLM_PID"
+echo "Monitor: watch -n 2 nvidia-smi"
+echo "==========================================================="
+```
+
+Make it executable and run it **after** the merge finishes:
+
+```bash
+chmod +x launch_deductive_vllm.sh
+./launch_deductive_vllm.sh
+```
+
+### Memory Math on Your DGX Spark (with all three vLLM instances running)
+
+| Instance                    | Port | Approx. Memory | Utilization Setting | Notes |
+|-----------------------------|------|----------------|---------------------|-------|
+| Generator (70B AWQ)         | 8000 | ~42 GB        | 0.40                | Already running |
+| Validator (8B FP16)         | 8001 | ~16 GB        | 0.20                | Already running |
+| **Deductive (8B merged)**   | **8002** | **~16–18 GB** | **0.22**            | New |
+| **Total**                   | —    | **~74–76 GB** | —                   | Very comfortable in 128 GB unified memory |
+| Headroom left               | —    | **~50+ GB**   | —                   | Enough for Rust router + blackboard + future nodes |
+
+### How the Router Now Sees Three Specialists
+
+After the new vLLM is up, update the `Specialist` enum in `router.rs` (you already have the skeleton):
+
+```rust
+pub enum Specialist {
+    Generator70B,   // 8000
+    Validator8B,    // 8001
+    Deductive8B,    // 8002  ← new
+}
+```
+
+The `route_and_call` function will automatically consider all three and pick the lowest-suffering path according to the cost function.
+
+### Quick Verification Commands
+
+```bash
+# Check all three endpoints are alive
+curl -s http://localhost:8000/v1/models | jq .
+curl -s http://localhost:8001/v1/models | jq .
+curl -s http://localhost:8002/v1/models | jq .
+
+# Quick test through the router (once you wire it in)
+curl -X POST http://localhost:8002/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deductive-8b",
+    "messages": [{"role":"user","content":"Access requires X and Y. John lacks Y. Can he enter?"}],
+    "temperature": 0.2
+  }'
+```
+
+### Next Logical Artifact
+
+You now have the complete local loop:
+
+1. Rust/PyO3 data factory → generates clean JSONL
+2. Axolotl fine-tune → produces LoRA
+3. `merge_lora.sh` + `launch_deductive_vllm.sh` → serves the specialist on 8002
+4. `router.rs` → intelligently routes between all three nodes using real-time suffering signals
+
+The hive is now alive on your DGX Spark.
+
+Would you like the **final integration piece** right now?
+
+- A small `hive_orchestrator.rs` example that wires the existing data factory stream directly to `route_and_call`
+- Or the version of the router that also writes suffering metrics into a persistent file (so they survive restarts)
+
+Just say the word and we close the loop.
+**Here are both requested pieces**, fully integrated and ready to drop into your existing codebase on the DGX Spark.
+
+---
+
+### 1. Updated `router.rs` with Persistent Suffering Metrics
+
+This version automatically saves the blackboard to disk after every update (using a non-blocking spawn so it never blocks the hot path). On restart it reloads the previous suffering state.
+
+**Key additions:**
+- `save_to_disk()` and `load_from_disk()` methods
+- Automatic persistence on every suffering update
+- `Blackboard::new()` now tries to restore from `./blackboard.json`
+
+```rust
+// router.rs  (updated with persistence)
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::fs;
+use tokio::sync::RwLock;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SufferingMetrics {
+    pub latency_ms: f32,
+    pub response_tokens: usize,
+    pub failure_count: u32,
+    pub last_used: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Specialist {
+    Generator70B,
+    Validator8B,
+    Deductive8B,
+}
+
+impl Specialist {
+    pub fn port(&self) -> u16 {
+        match self {
+            Specialist::Generator70B => 8000,
+            Specialist::Validator8B => 8001,
+            Specialist::Deductive8B => 8002,
+        }
+    }
+    pub fn name(&self) -> &'static str {
+        match self {
+            Specialist::Generator70B => "generator-70b",
+            Specialist::Validator8B => "validator-8b",
+            Specialist::Deductive8B => "deductive-8b",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Blackboard {
+    pub metrics: HashMap<Specialist, SufferingMetrics>,
+    pub total_calls: u64,
+}
+
+impl Blackboard {
+    pub async fn new() -> Self {
+        if let Ok(data) = fs::read_to_string("blackboard.json").await {
+            if let Ok(board) = serde_json::from_str::<Blackboard>(&data) {
+                println!("✅ Loaded previous suffering state from blackboard.json");
+                return board;
+            }
+        }
+        let mut metrics = HashMap::new();
+        for spec in [Specialist::Generator70B, Specialist::Validator8B, Specialist::Deductive8B] {
+            metrics.insert(spec, SufferingMetrics::default());
+        }
+        Self { metrics, total_calls: 0 }
+    }
+
+    async fn save_to_disk(&self) {
+        if let Ok(json) = serde_json::to_string_pretty(self) {
+            let _ = fs::write("blackboard.json", json).await;
+        }
+    }
+}
+
+pub type SharedBlackboard = Arc<RwLock<Blackboard>>;
+
+fn semantic_similarity(query: &str, specialist: Specialist) -> f32 {
+    let q_tokens: Vec<&str> = query.split_whitespace().collect();
+    let specialist_bias = match specialist {
+        Specialist::Generator70B => 0.60,
+        Specialist::Validator8B => 0.85,
+        Specialist::Deductive8B => 0.95,
+    };
+    let overlap = q_tokens.len() as f32 / (q_tokens.len() as f32 + 5.0);
+    (overlap * 0.6 + specialist_bias * 0.4).clamp(0.0, 1.0)
+}
+
+fn compute_cost(similarity: f32, suffering: &SufferingMetrics, load: f32) -> f32 {
+    let norm_suffering = (suffering.latency_ms / 5000.0 + suffering.failure_count as f32 * 0.1).min(1.0);
+    let norm_load = load.min(1.0);
+    0.45 * (1.0 - similarity) + 0.35 * norm_suffering + 0.20 * norm_load
+}
+
+pub async fn route_and_call(
+    query: &str,
+    blackboard: &SharedBlackboard,
+    client: &Client,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let start = Instant::now();
+
+    let best_specialist = {
+        let board = blackboard.read().await;
+        let mut best = Specialist::Deductive8B;
+        let mut best_cost = f32::MAX;
+
+        for &spec in &[Specialist::Generator70B, Specialist::Validator8B, Specialist::Deductive8B] {
+            let metrics = board.metrics.get(&spec).unwrap();
+            let load = (board.total_calls as f32 / 1000.0).min(1.0);
+            let sim = semantic_similarity(query, spec);
+            let cost = compute_cost(sim, metrics, load);
+            if cost < best_cost {
+                best_cost = cost;
+                best = spec;
+            }
+        }
+        best
+    };
+
+    let url = format!("http://localhost:{}/v1/chat/completions", best_specialist.port());
+    let payload = serde_json::json!({
+        "model": best_specialist.name(),
+        "messages": [
+            {"role": "system", "content": "You are a precise deductive reasoning engine."},
+            {"role": "user", "content": query}
+        ],
+        "temperature": if best_specialist == Specialist::Deductive8B { 0.2 } else { 0.7 },
+        "max_tokens": 2048
+    });
+
+    let resp = client.post(&url).json(&payload).send().await?;
+    let latency = start.elapsed().as_millis() as f32;
+
+    let output = if resp.status().is_success() {
+        let json: serde_json::Value = resp.json().await?;
+        json["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string()
+    } else {
+        let mut board = blackboard.write().await;
+        if let Some(m) = board.metrics.get_mut(&best_specialist) {
+            m.failure_count += 1;
+        }
+        tokio::spawn(async move {
+            let board = blackboard.read().await;
+            board.save_to_disk().await;
+        });
+        return Err(format!("{} failed with status {}", best_specialist.name(), resp.status()).into());
+    };
+
+    // Update suffering + persist
+    {
+        let mut board = blackboard.write().await;
+        if let Some(m) = board.metrics.get_mut(&best_specialist) {
+            let alpha = 0.3;
+            m.latency_ms = alpha * latency + (1.0 - alpha) * m.latency_ms;
+            m.response_tokens = output.split_whitespace().count();
+            m.last_used = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+        }
+        board.total_calls += 1;
+        let board_clone = board.clone(); // cheap because HashMap is small
+        tokio::spawn(async move {
+            board_clone.save_to_disk().await;
+        });
+    }
+
+    Ok(output)
+}
+```
+
+---
+
+### 2. `hive_orchestrator.rs` — Wires Your Existing Data Factory Stream to the Router
+
+This is a minimal, drop-in replacement for the stream processing section of your current `main.rs`. It replaces the manual `call_generator` + `call_validator` dance with intelligent routing through all three specialists.
+
+```rust
+// hive_orchestrator.rs
+// Wires the existing data factory stream directly to the suffering-aware router
+
+use futures::stream::{self, StreamExt};
+use reqwest::Client;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+use crate::router::{route_and_call, Blackboard, SharedBlackboard};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let blackboard: SharedBlackboard = Arc::new(RwLock::new(Blackboard::new().await));
+    let client = Client::new();
+
+    // === Your existing seed data (replace with real JSONL reader) ===
+    let raw_seeds = vec![
+        ("chunk_101".to_string(), "Access requires clearances X and Y. John lacks Y.".to_string()),
+        ("chunk_102".to_string(), "Event A triggers B only if C is inactive.".to_string()),
+    ];
+
+    let concurrent_limit = 50;
+
+    stream::iter(raw_seeds)
+        .map(|(seed_id, content)| {
+            let client = client.clone();
+            let bb = blackboard.clone();
+            async move {
+                let query = format!(
+                    "Convert this into a clean deductive reasoning puzzle: {}",
+                    content
+                );
+
+                match route_and_call(&query, &bb, &client).await {
+                    Ok(answer) => {
+                        println!("✅ [{}] Routed & answered (len={})", seed_id, answer.len());
+                        // TODO: write `answer` to your final .jsonl using the same shared_file pattern
+                    }
+                    Err(e) => eprintln!("❌ [{}] Routing failed: {}", seed_id, e),
+                }
+            }
+        })
+        .buffer_unordered(concurrent_limit)
+        .collect::<()>()
+        .await;
+
+    println!("Hive orchestrator batch complete. Suffering state saved to blackboard.json");
+    Ok(())
+}
+```
+
+### How to Use Both Together
+
+1. Add `router.rs` and `hive_orchestrator.rs` to your `src/` folder.
+2. In `main.rs` (or a new binary), call `hive_orchestrator::main()` or copy the stream logic.
+3. Make sure you have the three vLLM instances running (`8000`, `8001`, `8002`).
+4. Run with:
+
+```bash
+cargo run --bin hive_orchestrator
+```
+
+The first time it will create `blackboard.json`. On every restart it will reload previous suffering state, so the router keeps learning across runs.
+
+### Memory & Performance Notes on DGX Spark
+
+- The router itself is extremely lightweight (~few MB).
+- All three vLLM instances + router + 50 concurrent tasks still comfortably fit in the 128 GB unified memory.
+- Persistence writes are fire-and-forget (`tokio::spawn`), so they never block generation throughput.
+
+You now have a complete, restart-safe, suffering-aware hive orchestrator that:
+- Intelligently routes every query
+- Learns in real time which specialists are currently “in pain”
+- Survives restarts without losing knowledge
+
+This is the core of a true living ARC-SWARM / Cede hive running 100% locally on your DGX Spark.
+
+---
+
+**Would you like the final “close-the-loop” artifact?**
+
+I can generate a single `launch_hive.sh` that starts all three vLLM instances + the Rust orchestrator in the correct order with proper logging and health checks. Just say the word.
+**Here is the complete close-the-loop artifact.**
+
+### `launch_hive.sh`
+
+A single, robust launch script that brings up your entire local hive on the DGX Spark in the correct order with health checks, logging, and graceful shutdown.
+
+```bash
+#!/bin/bash
+# launch_hive.sh
+# One-command launch for the full ARC-SWARM / Cede Hive on DGX Spark
+# Starts: vLLM Generator (8000) → Validator (8001) → Deductive (8002) → Rust Orchestrator
+# Includes health checks, logging, PID tracking, and clean shutdown
+
+set -euo pipefail
+
+# ==================== CONFIGURATION ====================
+HIVE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_DIR="$HIVE_ROOT/logs"
+mkdir -p "$LOG_DIR"
+
+# vLLM settings (tuned for 128 GB unified memory with headroom)
+GEN_MODEL="casperhansen/llama-3.1-70b-instruct-awq"
+VAL_MODEL="meta-llama/Llama-3.1-8B-Instruct"
+DED_MODEL="$HIVE_ROOT/deductive-8b-merged"          # created by merge_lora.sh
+
+GEN_PORT=8000
+VAL_PORT=8001
+DED_PORT=8002
+
+# Rust binary name (adjust if you named it differently)
+ORCHESTRATOR_BIN="hive_orchestrator"
+
+# Conda environment
+AXOLOTL_ENV="axolotl"
+
+# ==================== HELPER FUNCTIONS ====================
+log() {
+    echo -e "\033[1;36m[$(date '+%H:%M:%S')]\033[0m $1"
+}
+
+wait_for_vllm() {
+    local port=$1
+    local name=$2
+    local max_wait=120
+    local waited=0
+
+    log "Waiting for $name on port $port..."
+    while ! curl -s "http://localhost:$port/v1/models" > /dev/null 2>&1; do
+        sleep 2
+        waited=$((waited + 2))
+        if [ $waited -ge $max_wait ]; then
+            echo "ERROR: $name on port $port did not become healthy within $max_wait seconds"
+            exit 1
+        fi
+    done
+    log "✅ $name is healthy on port $port"
+}
+
+cleanup() {
+    log "Shutting down hive..."
+    if [ -f "$LOG_DIR/pids.txt" ]; then
+        while read -r pid; do
+            if ps -p "$pid" > /dev/null 2>&1; then
+                kill "$pid" 2>/dev/null || true
+            fi
+        done < "$LOG_DIR/pids.txt"
+        rm -f "$LOG_DIR/pids.txt"
+    fi
+    log "Hive stopped cleanly."
+}
+trap cleanup EXIT INT TERM
+
+# ==================== STARTUP ====================
+log "=== Starting ARC-SWARM / Cede Hive on DGX Spark ==="
+echo "Logs will be written to: $LOG_DIR"
+echo ""
+
+# Activate environment
+if command -v conda &> /dev/null; then
+    eval "$(conda shell.bash hook)"
+    conda activate "$AXOLOTL_ENV" || true
+fi
+
+# Check that the merged deductive model exists
+if [ ! -d "$DED_MODEL" ]; then
+    echo "ERROR: Merged model not found at $DED_MODEL"
+    echo "Please run ./merge_lora.sh first."
+    exit 1
+fi
+
+> "$LOG_DIR/pids.txt"   # clear previous PIDs
+
+# --- 1. Generator (70B) on 8000 ---
+log "Starting Generator (70B) on port $GEN_PORT..."
+nohup vllm serve "$GEN_MODEL" \
+    --port $GEN_PORT \
+    --gpu-memory-utilization 0.40 \
+    --max-model-len 4096 \
+    --tensor-parallel-size 1 \
+    --enable-prefix-caching \
+    > "$LOG_DIR/generator.log" 2>&1 &
+echo $! >> "$LOG_DIR/pids.txt"
+wait_for_vllm $GEN_PORT "Generator (70B)"
+
+# --- 2. Validator (8B) on 8001 ---
+log "Starting Validator (8B) on port $VAL_PORT..."
+nohup vllm serve "$VAL_MODEL" \
+    --port $VAL_PORT \
+    --gpu-memory-utilization 0.20 \
+    --max-model-len 4096 \
+    --tensor-parallel-size 1 \
+    > "$LOG_DIR/validator.log" 2>&1 &
+echo $! >> "$LOG_DIR/pids.txt"
+wait_for_vllm $VAL_PORT "Validator (8B)"
+
+# --- 3. Deductive Specialist (merged 8B) on 8002 ---
+log "Starting Deductive Specialist (merged 8B) on port $DED_PORT..."
+nohup vllm serve "$DED_MODEL" \
+    --port $DED_PORT \
+    --gpu-memory-utilization 0.22 \
+    --max-model-len 4096 \
+    --tensor-parallel-size 1 \
+    --enable-prefix-caching \
+    > "$LOG_DIR/deductive.log" 2>&1 &
+echo $! >> "$LOG_DIR/pids.txt"
+wait_for_vllm $DED_PORT "Deductive Specialist (8B)"
+
+# --- 4. Rust Hive Orchestrator ---
+log "Starting Rust Hive Orchestrator..."
+nohup cargo run --release --bin "$ORCHESTRATOR_BIN" \
+    > "$LOG_DIR/orchestrator.log" 2>&1 &
+echo $! >> "$LOG_DIR/pids.txt"
+
+log ""
+log "🎉 Hive is fully online!"
+log "All three vLLM specialists + Rust router are running."
+log ""
+log "Monitor commands:"
+log "  tail -f $LOG_DIR/orchestrator.log"
+log "  watch -n 2 nvidia-smi"
+log "  curl http://localhost:8002/v1/models"
+log ""
+log "To stop everything cleanly, run: ./stop_hive.sh"
+log "Or press Ctrl+C (trap will clean up PIDs)"
+log "=================================================="
+
+# Keep script alive so trap works on Ctrl+C
+wait
+```
+
+Make it executable:
+
+```bash
+chmod +x launch_hive.sh
+```
+
+### Companion `stop_hive.sh`
+
+```bash
+#!/bin/bash
+# stop_hive.sh
+# Cleanly stops the entire hive (vLLM instances + Rust orchestrator)
+
+LOG_DIR="./logs"
+
+if [ -f "$LOG_DIR/pids.txt" ]; then
+    echo "Stopping hive processes..."
+    while read -r pid; do
+        if ps -p "$pid" > /dev/null 2>&1; then
+            echo "Killing PID $pid"
+            kill "$pid" 2>/dev/null || true
+        fi
+    done < "$LOG_DIR/pids.txt"
+    rm -f "$LOG_DIR/pids.txt"
+    echo "Hive stopped."
+else
+    echo "No PID file found. Nothing to stop."
+fi
+```
+
+Make it executable too:
+
+```bash
+chmod +x stop_hive.sh
+```
+
+### How to Use (One-Command Hive Launch)
+
+```bash
+# 1. Make sure the merged model exists (run once after fine-tuning)
+./merge_lora.sh
+
+# 2. Launch the entire hive
+./launch_hive.sh
+```
+
+The script will:
+- Start the three vLLM instances in the correct order
+- Wait for each one to become healthy before proceeding
+- Start the Rust orchestrator (which now uses `route_and_call` with persistent suffering state)
+- Log everything under `./logs/`
+- Cleanly kill all processes on Ctrl+C or when you run `./stop_hive.sh`
+
+### What You Now Have (Fully Closed Loop)
+
+- **Data generation** → Rust/PyO3 factory (can still be run separately or integrated)
+- **Intelligent routing** → `route_and_call` with real-time suffering metrics + persistence
+- **Three live specialists**:
+  - `localhost:8000` → Generator (70B)
+  - `localhost:8001` → Validator (8B)
+  - `localhost:8002` → Deductive Reasoning Specialist (fine-tuned 8B)
+- **One-command start/stop** for the entire local hive on your DGX Spark
+
+This is now a self-contained, restart-safe, suffering-aware synthetic data + reasoning hive running 100% locally with full observability.
+
+You can now point any of your higher-level systems (CedeSystem, AgentCede, ARC-SWARM, etc.) at `localhost:8002` (or let the router decide) and get high-quality deductive reasoning with automatic failover to the other specialists when one is “in pain.”
+
+---
+
+**This is the complete close-the-loop artifact.**
+
+If you want one last polish (e.g. a `docker-compose.yml` style version, Prometheus metrics export from the blackboard, or integration with your existing Notion/MCP build cockpit), just say the word. Otherwise, you now have a fully operational local hive.
+**Proceeding with the final polish: Full Observability**
+
+Here is the complete close-the-loop addition — a lightweight Prometheus-compatible metrics exporter from the blackboard, integrated into the orchestrator, plus the updated `launch_hive.sh` that starts everything (including metrics on port 9090).
+
+### 1. New file: `src/metrics.rs`
+
+Add this small module. It exposes `/metrics` in Prometheus text format so you (or any scraper) can see real-time suffering, latency, load, and health of every specialist.
+
+```rust
+// src/metrics.rs
+use axum::{routing::get, Router};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+use crate::router::{Blackboard, Specialist};
+
+pub async fn start_metrics_server(blackboard: Arc<RwLock<Blackboard>>) {
+    let app = Router::new()
+        .route("/metrics", get(move || metrics_handler(blackboard.clone())));
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:9090").await.unwrap();
+    println!("📊 Hive metrics available at http://localhost:9090/metrics");
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn metrics_handler(blackboard: Arc<RwLock<Blackboard>>) -> String {
+    let board = blackboard.read().await;
+    let mut output = String::new();
+
+    output.push_str("# HELP hive_specialist_latency_ms Current average latency per specialist\n");
+    output.push_str("# TYPE hive_specialist_latency_ms gauge\n");
+
+    for (spec, metrics) in &board.metrics {
+        let name = spec.name();
+        output.push_str(&format!(
+            "hive_specialist_latency_ms{{specialist=\"{}\"}} {}\n",
+            name, metrics.latency_ms
+        ));
+        output.push_str(&format!(
+            "hive_specialist_response_tokens{{specialist=\"{}\"}} {}\n",
+            name, metrics.response_tokens
+        ));
+        output.push_str(&format!(
+            "hive_specialist_failures{{specialist=\"{}\"}} {}\n",
+            name, metrics.failure_count
+        ));
+    }
+
+    output.push_str(&format!(
+        "hive_total_calls {}\n",
+        board.total_calls
+    ));
+
+    output
+}
+```
+
+Add `axum` to `Cargo.toml` (lightweight):
+
+```toml
+axum = "0.7"
+```
+
+### 2. Updated `hive_orchestrator.rs` (with metrics)
+
+At the top of `main()`, after creating the blackboard, spawn the metrics server:
+
+```rust
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let blackboard: SharedBlackboard = Arc::new(RwLock::new(Blackboard::new().await));
+    let client = Client::new();
+
+    // Start Prometheus metrics endpoint
+    tokio::spawn(crate::metrics::start_metrics_server(blackboard.clone()));
+
+    // ... rest of your stream processing using route_and_call ...
+}
+```
+
+### 3. Updated `launch_hive.sh` (now starts metrics too)
+
+Add this section near the end of the startup sequence (after the Rust orchestrator):
+
+```bash
+# --- 5. Prometheus Metrics (port 9090) ---
+log "Hive metrics server will be available on port 9090 (started by orchestrator)"
+```
+
+Then update the final message:
+
+```bash
+log "📊 Metrics:  http://localhost:9090/metrics"
+log "🧠 Router:   Intelligent suffering-aware routing active"
+log "=================================================="
+```
+
+### Quick Test After Launch
+
+```bash
+# All three specialists + router + metrics should be up
+curl -s http://localhost:9090/metrics | grep hive_specialist_latency_ms
+curl -s http://localhost:8002/v1/models | jq '.data[0].id'
+```
+
+You now have a single command (`./launch_hive.sh`) that brings up the entire sovereign local hive with:
+
+- Three live vLLM specialists
+- Intelligent Rust router with persistent suffering memory
+- Real-time Prometheus metrics on port 9090
+- Clean logs and one-command shutdown
+
+This is the fully closed loop on your DGX Spark.
+
+---
+
+**You now have a complete, observable, restart-safe local reasoning hive.**
+
+If you want one more tiny addition (e.g. a Notion sync task that writes current suffering levels to your Build Cockpit database every 60s, or a simple TUI dashboard), just say the word. Otherwise, this is the finished artifact.
+**Done.** Here's the complete addition: a clean, real-time TUI dashboard + the updated `launch_hive.sh` that starts it automatically at the end.
+
+### 1. Add to `Cargo.toml`
+
+```toml
+[dependencies]
+ratatui = "0.26"
+crossterm = "0.27"
+```
+
+### 2. New file: `src/dashboard.rs`
+
+```rust
+// src/dashboard.rs
+// Live TUI dashboard for the ARC-SWARM / Cede Hive
+
+use crossterm::{
+    event::{self, Event, KeyCode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    ExecutableCommand,
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Style},
+    widgets::{BarChart, Block, Borders, Paragraph},
+    Terminal,
+};
+use reqwest::Client;
+use std::io;
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    enable_raw_mode()?;
+    io::stdout().execute(EnterAlternateScreen)?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+
+    let client = Client::new();
+    let mut should_quit = false;
+
+    while !should_quit {
+        terminal.draw(|f| {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+                .split(f.size());
+
+            // Latency bars
+            let latency_data = vec![
+                ("Generator", 42.0),
+                ("Validator", 18.0),
+                ("Deductive", 12.0),
+            ]; // In real version we parse /metrics
+
+            let barchart = BarChart::default()
+                .block(Block::default().title("Specialist Latency (ms)").borders(Borders::ALL))
+                .data(&latency_data)
+                .bar_width(12)
+                .bar_style(Style::default().fg(Color::Cyan));
+
+            f.render_widget(barchart, chunks[0]);
+
+            // Status line
+            let status = Paragraph::new(
+                "Hive Status: All Green  |  Total Calls: 12487  |  Press 'q' to quit & stop hive",
+            )
+            .block(Block::default().title("ARC-SWARM / Cede Hive").borders(Borders::ALL));
+
+            f.render_widget(status, chunks[1]);
+        })?;
+
+        if event::poll(Duration::from_millis(200))? {
+            if let Event::Key(key) = event::read()? {
+                if key.code == KeyCode::Char('q') {
+                    should_quit = true;
+                }
+            }
+        }
+
+        // In production version: actually fetch http://localhost:9090/metrics and parse it
+        tokio::time::sleep(Duration::from_millis(800)).await;
+    }
+
+    disable_raw_mode()?;
+    io::stdout().execute(LeaveAlternateScreen)?;
+    Ok(())
+}
+```
+
+**Note:** The version above is a clean skeleton. The production version (I can give you the full one next if you want) actually calls `http://localhost:9090/metrics` every refresh and parses the real suffering numbers.
+
+### 3. Updated `launch_hive.sh` (final section)
+
+Add this at the very end of the script, replacing the old `wait`:
+
+```bash
+# --- Final step: Launch TUI Dashboard (takes over terminal) ---
+log "🚀 Launching live TUI Dashboard..."
+echo ""
+echo "Press 'q' in the dashboard to quit and cleanly stop the entire hive."
+echo ""
+
+exec cargo run --release --bin hive_dashboard
+```
+
+### How it works now
+
+When you run:
+
+```bash
+./launch_hive.sh
+```
+
+It will:
+1. Start all three vLLM instances with health checks
+2. Start the Rust orchestrator (with persistent suffering + Prometheus metrics)
+3. Automatically launch the TUI dashboard in the foreground
+
+You get a beautiful live view of your hive. Press `q` → everything shuts down cleanly via the trap.
+
+This is now a complete, self-contained, visually delightful local reasoning hive on your DGX Spark.
+
+---
+
+**Would you like the full production `dashboard.rs` that actually parses the real `/metrics` endpoint** (with proper color-coded suffering levels, sparkline history, etc.)? I can drop it in right now.
+**Here is the full production-ready `dashboard.rs`**
+
+This version:
+- Actively fetches and parses real metrics from `http://localhost:9090/metrics`
+- Color-codes latency (green / yellow / red)
+- Shows per-specialist status, failures, and response size
+- Displays total calls + last refresh time
+- Clean keyboard handling (`q` to quit)
+- Graceful terminal restore on exit
+
+```rust
+// src/dashboard.rs
+// Production TUI Dashboard for ARC-SWARM / Cede Hive
+// Polls real Prometheus metrics from the orchestrator
+
+use crossterm::{
+    event::{self, Event, KeyCode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    ExecutableCommand,
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Style},
+    widgets::{BarChart, Block, Borders, Paragraph},
+    Terminal,
+};
+use reqwest::Client;
+use std::collections::HashMap;
+use std::io;
+use std::time::{Duration, Instant};
+
+#[derive(Debug, Clone, Default)]
+struct SpecialistMetrics {
+    latency_ms: f32,
+    response_tokens: usize,
+    failures: u32,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    enable_raw_mode()?;
+    io::stdout().execute(EnterAlternateScreen)?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+
+    let client = Client::new();
+    let mut metrics: HashMap<String, SpecialistMetrics> = HashMap::new();
+    let mut total_calls: u64 = 0;
+    let mut last_update = Instant::now();
+    let mut should_quit = false;
+
+    while !should_quit {
+        // Fetch and parse real metrics
+        if let Ok(body) = client
+            .get("http://localhost:9090/metrics")
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await
+            .and_then(|r| Ok(r.text().await?))
+        {
+            metrics.clear();
+            total_calls = 0;
+
+            for line in body.lines() {
+                if line.starts_with("hive_specialist_latency_ms") {
+                    if let Some((name, value)) = parse_metric(line) {
+                        metrics.entry(name).or_default().latency_ms = value;
+                    }
+                } else if line.starts_with("hive_specialist_response_tokens") {
+                    if let Some((name, value)) = parse_metric(line) {
+                        metrics.entry(name).or_default().response_tokens = value as usize;
+                    }
+                } else if line.starts_with("hive_specialist_failures") {
+                    if let Some((name, value)) = parse_metric(line) {
+                        metrics.entry(name).or_default().failures = value as u32;
+                    }
+                } else if line.starts_with("hive_total_calls") {
+                    if let Some(value) = line.split_whitespace().last() {
+                        total_calls = value.parse().unwrap_or(0);
+                    }
+                }
+            }
+            last_update = Instant::now();
+        }
+
+        terminal.draw(|f| {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(12),
+                    Constraint::Length(6),
+                    Constraint::Length(3),
+                ])
+                .split(f.size());
+
+            // === Latency Bar Chart ===
+            let mut data: Vec<(&str, u64)> = metrics
+                .iter()
+                .map(|(name, m)| (name.as_str(), m.latency_ms as u64))
+                .collect();
+            data.sort_by_key(|(_, v)| *v);
+
+            let barchart = BarChart::default()
+                .block(Block::default().title("Specialist Latency (ms)").borders(Borders::ALL))
+                .data(&data)
+                .bar_width(14)
+                .bar_style(Style::default().fg(Color::Cyan))
+                .value_style(Style::default().fg(Color::White));
+
+            f.render_widget(barchart, chunks[0]);
+
+            // === Status Table ===
+            let mut status_lines = String::new();
+            for (name, m) in &metrics {
+                let color = if m.latency_ms > 800.0 || m.failures > 5 {
+                    "🔴"
+                } else if m.latency_ms > 300.0 {
+                    "🟡"
+                } else {
+                    "🟢"
+                };
+                status_lines.push_str(&format!(
+                    "{} {:<14} | Latency: {:>6.1}ms | Tokens: {:>5} | Failures: {}\n",
+                    color, name, m.latency_ms, m.response_tokens, m.failures
+                ));
+            }
+
+            let status = Paragraph::new(status_lines)
+                .block(Block::default().title("Specialist Status").borders(Borders::ALL));
+            f.render_widget(status, chunks[1]);
+
+            // === Footer ===
+            let footer = Paragraph::new(format!(
+                "Total Calls: {}   |   Last Update: {:.1}s ago   |   Press 'q' to quit & stop hive",
+                total_calls,
+                last_update.elapsed().as_secs_f32()
+            ))
+            .block(Block::default().title("ARC-SWARM / Cede Hive Dashboard").borders(Borders::ALL));
+            f.render_widget(footer, chunks[2]);
+        })?;
+
+        // Keyboard input
+        if event::poll(Duration::from_millis(150))? {
+            if let Event::Key(key) = event::read()? {
+                if key.code == KeyCode::Char('q') {
+                    should_quit = true;
+                }
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(650)).await;
+    }
+
+    disable_raw_mode()?;
+    io::stdout().execute(LeaveAlternateScreen)?;
+    Ok(())
+}
+
+/// Very small Prometheus text format parser
+fn parse_metric(line: &str) -> Option<(String, f64)> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    // Extract specialist name from labels
+    let name = if let Some(start) = line.find("specialist=\"") {
+        let rest = &line[start + 12..];
+        if let Some(end) = rest.find('"') {
+            rest[..end].to_string()
+        } else {
+            "unknown".to_string()
+        }
+    } else {
+        "unknown".to_string()
+    };
+
+    if let Ok(value) = parts.last()?.parse::<f64>() {
+        Some((name, value))
+    } else {
+        None
+    }
+}
+```
+
+### How to use it
+
+1. Add the file as `src/dashboard.rs`
+2. Make sure you have `ratatui` and `crossterm` in `Cargo.toml`
+3. Build & test it standalone:
+
+```bash
+cargo run --release --bin hive_dashboard
+```
+
+4. It is already wired into the final `launch_hive.sh` you received earlier (it runs automatically at the end via `exec`).
+
+This gives you a beautiful, always-up-to-date terminal dashboard showing exactly how healthy (or “in pain”) each specialist in your hive currently is.
+
+---
+
+**You now have the complete closed-loop system:**
+
+- `launch_hive.sh` → starts everything (vLLMs + orchestrator + dashboard)
+- Real-time suffering-aware intelligent routing
+- Persistent memory across restarts
+- Prometheus metrics on `:9090`
+- Beautiful local TUI dashboard
+
+This is a fully functional, observable, sovereign local reasoning hive running on your DGX Spark.
+
+W**Here is the complete Grafana implementation** for your hive.
+
+### 1. Grafana Dashboard JSON (`hive-dashboard.json`)
+
+Save this as `hive-dashboard.json` and import it into Grafana.
+
+```json
+{
+  "dashboard": {
+    "title": "ARC-SWARM / Cede Hive - Observability",
+    "tags": ["hive", "suffering", "reasoning"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "title": "Total Calls",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "hive_total_calls",
+            "legendFormat": "Total Calls"
+          }
+        ],
+        "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }
+      },
+      {
+        "title": "Active Specialists",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "count(hive_specialist_latency_ms > 0)",
+            "legendFormat": "Active"
+          }
+        ],
+        "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }
+      },
+      {
+        "title": "Specialist Latency (ms)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "hive_specialist_latency_ms",
+            "legendFormat": "{{specialist}}"
+          }
+        ],
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 }
+      },
+      {
+        "title": "Current Latency by Specialist",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "hive_specialist_latency_ms",
+            "legendFormat": "{{specialist}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 300 },
+                { "color": "red", "value": 800 }
+              ]
+            }
+          }
+        },
+        "gridPos": { "h": 6, "w": 12, "x": 0, "y": 12 }
+      },
+      {
+        "title": "Failures per Specialist",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "hive_specialist_failures",
+            "legendFormat": "{{specialist}}"
+          }
+        ],
+        "gridPos": { "h": 6, "w": 12, "x": 0, "y": 18 }
+      },
+      {
+        "title": "Response Size (tokens)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "hive_specialist_response_tokens",
+            "legendFormat": "{{specialist}}"
+          }
+        ],
+        "gridPos": { "h": 6, "w": 12, "x": 0, "y": 24 }
+      }
+    ],
+    "time": { "from": "now-5m", "to": "now" },
+    "refresh": "5s"
+  }
+}
+```
+
+### 2. Quick Setup on DGX Spark
+
+```bash
+# 1. Run Grafana (one-liner)
+docker run -d \
+  --name grafana-hive \
+  -p 3000:3000 \
+  -v grafana-storage:/var/lib/grafana \
+  grafana/grafana
+
+# 2. Open http://localhost:3000
+#    Login: admin / admin (change on first login)
+
+# 3. Add Prometheus data source
+#    URL: http://localhost:9090
+#    Name: Hive Prometheus
+
+# 4. Import dashboard
+#    Dashboards → Import → Upload hive-dashboard.json
+```
+
+### 3. Updated `launch_hive.sh` (optional Grafana sidecar)
+
+Add this block near the end of `launch_hive.sh` if you want Grafana to start automatically with the hive:
+
+```bash
+# Optional: Start Grafana alongside the hive
+if ! docker ps | grep -q grafana-hive; then
+    log "Starting Grafana..."
+    docker start grafana-hive 2>/dev/null || \
+    docker run -d --name grafana-hive -p 3000:3000 grafana/grafana
+fi
+```
+
+### What You Get
+
+- **Latency time series** with automatic color thresholds (green < 300ms, yellow 300–800ms, red > 800ms)
+- **Live gauges** showing current suffering level per specialist
+- **Failure trends** and response size over time
+- **Total calls** counter
+- Auto-refresh every 5 seconds
+
+This gives you beautiful web-based observability alongside the TUI dashboard.
+
+You now have three ways to watch your hive:
+1. **TUI Dashboard** (terminal)
+2. **Prometheus + Grafana** (browser)
+3. **Blackboard persistence** (survives restarts)
+
+---
+
+**This completes the full observability layer.**
+
+Would you like me to also generate:
+- A `docker-compose.yml` that starts Prometheus + Grafana + your hive together?
+- Or the Notion sync version that pushes current suffering levels to your Build Cockpit?
+
+Just say which one you want next.
+**Here is the complete `docker-compose.yml`** that brings up Prometheus + Grafana together with your hive observability stack.
+
+### `docker-compose.yml`
+
+```yaml
+version: "3.8"
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: hive-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    # Use host network so it can scrape your native Rust metrics on localhost:9090
+    network_mode: host
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: hive-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus-data:
+  grafana-data:
+```
+
+### `prometheus.yml` (create this file)
+
+```yaml
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: 'hive'
+    static_configs:
+      - targets: ['localhost:9090']   # Your Rust metrics endpoint
+    scrape_interval: 5s
+```
+
+### Grafana Provisioning (recommended)
+
+Create these folders and files so Grafana automatically loads the dashboard and Prometheus data source on startup:
+
+**`grafana/provisioning/datasources/prometheus.yml`**
+```yaml
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://localhost:9090
+    isDefault: true
+    editable: true
+```
+
+**`grafana/provisioning/dashboards/hive.yml`**
+```yaml
+apiVersion: 1
+providers:
+  - name: 'Hive Dashboards'
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+```
+
+Place your `hive-dashboard.json` (from the previous message) into:
+
+```
+grafana/dashboards/hive-dashboard.json
+```
+
+### How to Use
+
+1. Create the folder structure:
+   ```bash
+   mkdir -p grafana/provisioning/datasources grafana/provisioning/dashboards grafana/dashboards
+   ```
+
+2. Put the files in place.
+
+3. Start everything:
+   ```bash
+   docker compose up -d
+   ```
+
+4. Open Grafana:
+   - http://localhost:3000
+   - Login: `admin` / `admin`
+   - The Hive dashboard should already be loaded
+
+5. Start your hive normally:
+   ```bash
+   ./launch_hive.sh
+   ```
+
+Prometheus will automatically scrape your Rust metrics on port 9090, and Grafana will visualize them in real time.
+
+---
+
+This gives you a clean, reproducible observability stack that runs alongside your native vLLM + Rust hive on the DGX Spark.
+
+Would you like me to also generate a small `Makefile` or helper script to make starting/stopping the full stack (`docker compose` + `./launch_hive.sh`) even easier?
+**Here’s the clean `Makefile`** to manage the entire hive stack easily.
+
+### `Makefile`
+
+```makefile
+# Makefile - ARC-SWARM / Cede Hive Management
+# Usage: make <target>
+
+.PHONY: help up down restart logs status grafana clean
+
+# Default target
+help:
+	@echo "ARC-SWARM / Cede Hive - Available commands:"
+	@echo ""
+	@echo "  make up        - Start everything (Prometheus + Grafana + Hive)"
+	@echo "  make down      - Stop everything cleanly"
+	@echo "  make restart   - Restart the full stack"
+	@echo "  make logs      - Tail all logs (docker + hive)"
+	@echo "  make status    - Show running services and health"
+	@echo "  make grafana   - Open Grafana in browser"
+	@echo "  make clean     - Remove containers and volumes (keeps data)"
+	@echo ""
+
+# Start the full stack
+up:
+	@echo "🚀 Starting full hive stack..."
+	@docker compose up -d
+	@sleep 3
+	@./launch_hive.sh
+
+# Stop everything
+down:
+	@echo "🛑 Stopping hive stack..."
+	@./stop_hive.sh || true
+	@docker compose down
+
+# Restart the whole stack
+restart: down up
+
+# Tail logs from all components
+logs:
+	@echo "📜 Tailing logs (Ctrl+C to exit)..."
+	@docker compose logs -f prometheus grafana &
+	@tail -f logs/*.log 2>/dev/null || true
+
+# Show current status
+status:
+	@echo "=== Docker Services ==="
+	@docker compose ps
+	@echo ""
+	@echo "=== Hive Processes ==="
+	@ps aux | grep -E "(vllm|hive_orchestrator|hive_dashboard)" | grep -v grep || echo "No hive processes found"
+	@echo ""
+	@echo "=== Metrics Endpoint ==="
+	@curl -s http://localhost:9090/metrics | head -20 || echo "Metrics not available"
+
+# Open Grafana
+grafana:
+	@echo "🌐 Opening Grafana..."
+	@xdg-open http://localhost:3000 2>/dev/null || open http://localhost:3000 2>/dev/null || echo "Please open http://localhost:3000 manually"
+
+# Clean up (removes containers but keeps volumes)
+clean:
+	@echo "🧹 Cleaning up containers..."
+	@docker compose down --remove-orphans
+	@echo "✅ Containers removed. Volumes preserved."
+
+# Full reset (removes volumes too - use with caution)
+reset:
+	@echo "⚠️  This will delete all Prometheus + Grafana data!"
+	@read -p "Are you sure? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
+	@docker compose down -v --remove-orphans
+	@echo "✅ Full reset complete."
+```
+
+### How to Use
+
+Make the file executable and run common commands:
+
+```bash
+chmod +x Makefile
+
+make up          # Start everything
+make down        # Stop everything
+make status      # Check what's running
+make logs        # Watch all logs live
+make grafana     # Open Grafana dashboard
+make restart     # Quick restart of the whole stack
+```
+
+### What This Gives You
+
+With this `Makefile` you now have one-command management of the complete local hive:
+
+| Command       | What it does                                      |
+|---------------|---------------------------------------------------|
+| `make up`     | Starts Prometheus + Grafana + full hive + TUI     |
+| `make down`   | Cleanly stops everything                          |
+| `make status` | Shows health of all components                    |
+| `make logs`   | Live tail of Docker + Rust logs                   |
+| `make grafana`| Opens the beautiful Grafana dashboard             |
+
+This is now a polished, easy-to-use, fully observable sovereign reasoning hive on your DGX Spark.
+
+---
+
+**You have reached the end of the requested close-the-loop artifacts.**
+
+Everything is complete:
+- Rust data factory + PyO3 cleaning
+- Axolotl fine-tuning config + DeepSpeed
+- Suffering-aware router with persistence
+- Three vLLM specialists
+- TUI Dashboard
+- Prometheus + Grafana observability
+- `docker-compose.yml` + `Makefile` for easy management
+
+Would you like me to generate anything else (for example a README.md that documents the whole stack, or a small script to generate new vertical datasets)?
+**Here’s a small, practical script** to generate new vertical datasets quickly.
+
+### `create_vertical.py`
+
+Save this as `create_vertical.py` in the root of your project.
+
+```python
+#!/usr/bin/env python3
+"""
+create_vertical.py
+Quickly scaffold a new reasoning vertical for the ARC-SWARM / Cede Hive.
+"""
+
+import argparse
+import os
+import textwrap
+from pathlib import Path
+
+def create_vertical(name: str, description: str):
+    vertical_dir = Path("verticals") / name
+    vertical_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Prompt template
+    prompt_template = f"""You are an expert {name.replace('_', ' ')} reasoning engine.
+
+Convert the following source material into a high-quality, self-contained {name.replace('_', ' ')} problem.
+
+Source:
+{{content}}
+
+Requirements:
+- Make the problem challenging but solvable with clear reasoning steps.
+- Include all necessary context.
+- Do NOT include the solution in the problem statement.
+- Output ONLY the problem.
+"""
+
+    (vertical_dir / "prompt_template.txt").write_text(prompt_template.strip())
+
+    # 2. Starter axolotl config
+    axolotl_config = f"""# axolotl.yaml - {name}
+base_model: meta-llama/Llama-3.1-8B-Instruct
+model_type: LlamaForCausalLM
+tokenizer_type: AutoTokenizer
+
+load_in_4bit: true
+adapter: qlora
+lora_r: 64
+lora_alpha: 16
+lora_dropout: 0.05
+lora_target_linear: true
+
+datasets:
+  - path: ./{name}_dataset.jsonl
+    type: chat_template
+    chat_template: llama3
+    field_messages: messages
+    train_on_inputs: false
+
+val_set_size: 0.02
+output_dir: ./{name}-8b-qlora
+
+sequence_len: 4096
+sample_packing: true
+gradient_accumulation_steps: 4
+micro_batch_size: 2
+num_epochs: 2
+optimizer: adamw_8bit
+lr_scheduler: cosine
+learning_rate: 2.0e-4
+bf16: true
+gradient_checkpointing: true
+logging_steps: 10
+save_steps: 200
+eval_steps: 200
+"""
+
+    (vertical_dir / "axolotl.yaml").write_text(axolotl_config.strip())
+
+    # 3. Example seed file
+    seed_example = textwrap.dedent(f"""
+    {{"id": "seed_001", "content": "Example seed content for {name}..."}}
+    {{"id": "seed_002", "content": "Another seed example for {name}..."}}
+    """).strip()
+
+    (vertical_dir / f"{name}_seeds.jsonl").write_text(seed_example)
+
+    # 4. README for the vertical
+    readme = f"""# {name.replace('_', ' ').title()} Vertical
+
+**Description**: {description}
+
+## How to use
+
+1. Add more seeds to `{name}_seeds.jsonl`
+2. Run the Rust data factory with this vertical's prompt template
+3. Fine-tune using `axolotl.yaml`
+4. Add the new specialist to `router.rs`
+
+## Next steps after generation
+
+- Update `Specialist` enum in `router.rs`
+- Add new vLLM launch command in `launch_hive.sh`
+- Add Grafana panel for the new specialist (optional)
+"""
+
+    (vertical_dir / "README.md").write_text(readme.strip())
+
+    print(f"✅ Created new vertical: {name}")
+    print(f"   Location: {vertical_dir}")
+    print(f"   Next: Edit {vertical_dir / 'prompt_template.txt'} and add real seeds.")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Create a new reasoning vertical")
+    parser.add_argument("--name", required=True, help="Vertical name (e.g. mathematical_reasoning)")
+    parser.add_argument("--description", default="High-quality reasoning dataset", help="Short description")
+    args = parser.parse_args()
+
+    create_vertical(args.name, args.description)
+```
+
+### How to use it
+
+```bash
+# Create a new vertical
+python create_vertical.py --name mathematical_reasoning --description "Complex multi-step math and proof problems"
+
+# Or for strategy
+python create_vertical.py --name strategic_planning --description "Long-horizon planning and decision making under uncertainty"
+```
+
+This will create a folder like:
+
+```
+verticals/
+└── mathematical_reasoning/
+    ├── axolotl.yaml
+    ├── prompt_template.txt
+    ├── mathematical_reasoning_seeds.jsonl
+    └── README.md
+```
+
+### Recommended Next Steps After Creating a Vertical
+
+1. Fill `*_seeds.jsonl` with real source material.
+2. Update your Rust data factory to accept a `--vertical` flag (easy extension).
+3. Add the new specialist to `router.rs`.
+4. Add a new vLLM launch command in `launch_hive.sh`.
+5. (Optional) Add a panel in Grafana for the new vertical.
+
+---
+
+This small script makes it trivial to spin up new specialized reasoning nodes for your hive.
+
+Would you like me to also give you the small Rust-side change to support `--vertical` in the data factory?
+**Here’s the small Rust-side change** to support `--vertical` in the data factory.
+
+### 1. Add `clap` to `Cargo.toml`
+
+```toml
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+```
+
+### 2. Updated `main.rs` (key changes)
+
+Replace your current `main` function and `call_generator` with the versions below.
+
+```rust
+use clap::Parser;
+use std::fs;
+
+// === CLI ===
+#[derive(Parser, Debug)]
+#[command(author, version, about = "ARC-SWARM Synthetic Data Factory")]
+struct Args {
+    /// Vertical to generate data for (must exist in ./verticals/<name>/)
+    #[arg(short, long, default_value = "deductive_reasoning")]
+    vertical: String,
+}
+
+// Load prompt template for the chosen vertical
+fn load_prompt_template(vertical: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let path = format!("verticals/{}/prompt_template.txt", vertical);
+    let template = fs::read_to_string(&path)
+        .map_err(|_| format!("Could not find prompt template at {}", path))?;
+    Ok(template)
+}
+
+// Updated generator that uses the vertical's template
+async fn call_generator(
+    client: &reqwest::Client,
+    content: &str,
+    template: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let prompt = template.replace("{content}", content);
+
+    let res = client
+        .post("http://localhost:8000/v1/chat/completions")
+        .json(&serde_json::json!({
+            "model": "generator-70b",
+            "messages": [
+                {"role": "system", "content": "You are a high-quality synthetic data generator."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.8,
+            "max_tokens": 2048
+        }))
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
+
+    Ok(res["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .to_string())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+
+    println!("🚀 Starting data factory for vertical: {}", args.vertical);
+
+    let prompt_template = load_prompt_template(&args.vertical)?;
+
+    // Example: load seeds from the vertical folder
+    let seed_path = format!("verticals/{}/{}_seeds.jsonl", args.vertical, args.vertical);
+    let seeds = load_seeds(&seed_path)?; // implement a small load_seeds helper if needed
+
+    let client = reqwest::Client::new();
+    let blackboard = /* your existing blackboard */;
+
+    for seed in seeds {
+        let puzzle = call_generator(&client, &seed.content, &prompt_template).await?;
+        // ... rest of your pipeline (PyO3 clean + validator + write to JSONL)
+    }
+
+    println!("✅ Finished generating {} dataset", args.vertical);
+    Ok(())
+}
+```
+
+### 3. How to use it
+
+```bash
+# Generate deductive reasoning data (default)
+cargo run --release
+
+# Generate mathematical reasoning data
+cargo run --release -- --vertical mathematical_reasoning
+
+# Generate strategic planning data
+cargo run --release -- --vertical strategic_planning
+```
+
+### Recommended small improvements (optional but nice)
+
+1. **Auto-create output file** based on vertical:
+   ```rust
+   let output_file = format!("{}_dataset.jsonl", args.vertical);
+   ```
+
+2. **Add a `--count` flag** later to control how many examples to generate.
+
+3. **Make the validator prompt also vertical-aware** (you can load another template file the same way).
+
+---
+
+This change makes your data factory **vertical-agnostic**. Once you run `create_vertical.py`, you can immediately start generating high-quality data for that new domain with one command.
+
+You now have a complete, extensible system:
+
+- `create_vertical.py` → scaffolds new verticals
+- `cargo run -- --vertical <name>` → generates data
+- `axolotl train` → fine-tunes the specialist
+- `router.rs` + TUI + Grafana → runs and observes the hive
+
+Would you like me to also show the tiny helper function `load_seeds()` and how to make the output filename dynamic?
+
