@@ -1,0 +1,17 @@
+{
+  "scenario_name": "worker_zero_metrics",
+  "description": "All metrics are zero — worker should easily survive with zero suffering.",
+  "expected_outcome": "survived",
+  "expected_score": 0.0,
+  "config": {
+    "alpha": 1.0,
+    "beta": 1.0,
+    "gamma": 1.0,
+    "threshold": 10.0
+  },
+  "metrics": {
+    "context_bloat": 0.0,
+    "error_rate": 0.0,
+    "coordination_debt": 0.0
+  }
+}

@@ -16,11 +16,11 @@ if ($Bench) {
 }
 
 if ($Demo) {
-    Write-Host "Running scenario runner demo..." -ForegroundColor Cyan
-    cargo run --bin demo -- healthy
-    cargo run --bin demo -- breach
-    cargo run --bin demo -- exact
-    cargo run --bin demo -- below
+    Write-Host "Running scenario runner demo (hive_workbench)..." -ForegroundColor Cyan
+    cargo run --bin hive_workbench -- run healthy
+    cargo run --bin hive_workbench -- run breach
+    cargo run --bin hive_workbench -- run exact
+    cargo run --bin hive_workbench -- run below
 }
 
 if ($Stress) {
@@ -29,4 +29,3 @@ if ($Stress) {
 }
 
 Write-Host "Validation passed!" -ForegroundColor Green
-

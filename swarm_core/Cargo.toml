@@ -12,6 +12,14 @@ serde_json = "1.0"
 trybuild = "1.0"
 criterion = "0.5"
 
+[[bin]]
+name = "hive_workbench"
+path = "src/bin/hive_workbench.rs"
+
+[[bin]]
+name = "batch_stress"
+path = "src/bin/batch_stress.rs"
+
 [[bench]]
 name = "nociceptor_bench"
 harness = false
@@ -23,6 +31,3 @@ harness = false
 [[bench]]
 name = "receipt_json_bench"
 harness = false
-
-
-

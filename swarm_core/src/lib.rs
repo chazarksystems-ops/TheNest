@@ -21,6 +21,15 @@ pub struct Scenario {
     pub scenario_name: String,
     pub config: NociceptorConfig,
     pub metrics: WorkerHealthMetrics,
+    // Optional metadata fields (P4) — use serde(default) so old files still load
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub expected_outcome: Option<String>, // "survived", "terminated", "invalid"
+    #[serde(default)]
+    pub expected_score: Option<f32>,
 }
 
 impl Scenario {

@@ -1,0 +1,17 @@
+{
+  "scenario_name": "worker_high_error_only",
+  "description": "Only error_rate is high. With threshold=5 and beta=2.0, score=10 should terminate.",
+  "expected_outcome": "terminated",
+  "expected_score": 10.0,
+  "config": {
+    "alpha": 0.0,
+    "beta": 2.0,
+    "gamma": 0.0,
+    "threshold": 5.0
+  },
+  "metrics": {
+    "context_bloat": 0.0,
+    "error_rate": 5.0,
+    "coordination_debt": 0.0
+  }
+}

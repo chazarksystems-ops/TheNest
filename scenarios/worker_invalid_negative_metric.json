@@ -1,5 +1,7 @@
 {
   "scenario_name": "worker_invalid_negative_metric",
+  "description": "Metric context_bloat is negative — should fail validation.",
+  "expected_outcome": "invalid",
   "config": {
     "alpha": 1.0,
     "beta": 1.0,

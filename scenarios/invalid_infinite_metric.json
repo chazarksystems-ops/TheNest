@@ -1,0 +1,16 @@
+{
+  "scenario_name": "invalid_infinite_metric",
+  "description": "Metric coordination_debt is null (simulates unrepresentable infinite value) — should fail deserialization.",
+  "expected_outcome": "invalid",
+  "config": {
+    "alpha": 1.0,
+    "beta": 1.0,
+    "gamma": 1.0,
+    "threshold": 10.0
+  },
+  "metrics": {
+    "context_bloat": 1.0,
+    "error_rate": 1.0,
+    "coordination_debt": null
+  }
+}

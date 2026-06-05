@@ -28,5 +28,26 @@
 | `SLICE_P2_04_PROPERTY_CHECKS` | PASS | 2026-06-03 | `swarm_core/tests/regression_tests.rs` | cargo test | Monotonicity and bounds property checks. |
 | `SLICE_P2_05_BENCH_REGRESSION_DOCS` | PASS | 2026-06-03 | `docs/P2_BENCHMARK_REGRESSION.md` | - | Benchmark comparison guides and template. |
 | `SLICE_P3_00_CONTEXT_CARD_CLEANUP` | PASS | 2026-06-05 | `ops/`, `docs/roadmap/` | - | Completed P3 planning cleanup, argument specs, and next slices queue. |
-
-
+| `SLICE_P3_01_HIVE_WORKBENCH_BINARY` | PASS | 2026-06-05 | `swarm_core/src/bin/hive_workbench.rs`, `Cargo.toml` | cargo test | Implemented full hive_workbench CLI replacing demo pattern. |
+| `SLICE_P3_02_CLI_COMMANDS` | PASS | 2026-06-05 | `swarm_core/src/bin/hive_workbench.rs` | cargo test | Implemented list, run, run-file, suite, output modes. |
+| `SLICE_P3_03_CLI_REGRESSION_TESTS` | PASS | 2026-06-05 | `swarm_core/tests/regression_tests.rs` | cargo test | Added 9 P3 regression tests for all CLI commands and output modes. |
+| `SLICE_P4_01_SCENARIO_METADATA` | PASS | 2026-06-05 | `swarm_core/src/lib.rs` | cargo test | Added optional id/description/expected_outcome/expected_score fields with serde(default). |
+| `SLICE_P4_02_VALIDATE_SCENARIOS_COMMAND` | PASS | 2026-06-05 | `swarm_core/src/bin/hive_workbench.rs` | cargo test | Implemented validate-scenarios command. |
+| `SLICE_P4_03_SCENARIO_LIBRARY_EXPANSION` | PASS | 2026-06-05 | `scenarios/` | cargo test | Added new scenario files including invalid_negative_threshold, invalid_infinite_metric, and 5 more. |
+| `SLICE_P4_04_SCENARIO_TEMPLATE` | PASS | 2026-06-05 | `scenarios/TEMPLATE.scenario.json` | - | Created scenario authoring template. |
+| `SLICE_P4_05_SCENARIO_AUTHORING_DOCS` | PASS | 2026-06-05 | `docs/P4_SCENARIO_AUTHORING.md` | - | Created scenario authoring guide. |
+| `SLICE_P5_01_RECEIPT_FILENAMES` | PASS | 2026-06-05 | `swarm_core/src/bin/hive_workbench.rs` | cargo test | Receipts use scenario_name: receipts/out/<name>_receipt.json. |
+| `SLICE_P5_02_SUMMARIZE_COMMAND` | PASS | 2026-06-05 | `swarm_core/src/bin/hive_workbench.rs` | cargo test | Implemented summarize command for receipt analysis. |
+| `SLICE_P5_03_REPORT_COMMAND` | PASS | 2026-06-05 | `swarm_core/src/bin/hive_workbench.rs` | cargo test | Implemented report scenarios generating Markdown evidence report. |
+| `SLICE_P5_04_RECEIPT_DOCS` | PASS | 2026-06-05 | `docs/P5_RECEIPT_EVIDENCE.md` | - | Created receipt and evidence system documentation. |
+| `SLICE_P6_01_GOLDEN_PREVIEW` | PASS | 2026-06-05 | `swarm_core/src/bin/hive_workbench.rs` | cargo test | Implemented golden-preview command (nil UUID, no write). |
+| `SLICE_P6_02_REGRESSION_COMMAND` | PASS | 2026-06-05 | `swarm_core/src/bin/hive_workbench.rs` | cargo test | Implemented regression command (validate-scenarios + golden check). |
+| `SLICE_P6_03_BASELINE_DOCS` | PASS | 2026-06-05 | `reports/baselines/`, `docs/P6_*.md` | - | Created baseline status, comparison template, golden policy docs. |
+| `SLICE_P7_01_QUICKSTART` | PASS | 2026-06-05 | `docs/QUICKSTART.md` | - | Created full quickstart guide. |
+| `SLICE_P7_02_README_REWRITE` | PASS | 2026-06-05 | `README.md` | - | Rewrote README with all 12 sections. |
+| `SLICE_P7_03_HANDOFF_MANIFEST` | PASS | 2026-06-05 | `reports/handoff/HANDOFF_MANIFEST.md` | - | Created handoff manifest. |
+| `SLICE_P7_04_OPS_SYNC` | PASS | 2026-06-05 | `ops/CURRENT_CONTEXT_CARD.md`, `ops/NEXT_SLICE_QUEUE.md` | - | Updated ops files to reflect P3-P8 completion. |
+| `SLICE_P8_01_FINAL_AUDIT` | PASS | 2026-06-05 | `reports/audits/P8_FINAL_AUDIT.md` | - | Created final audit document. |
+| `SLICE_P8_02_ROADMAP_CLOSEOUT` | PASS | 2026-06-05 | `ROADMAP_CLOSEOUT.md` | - | Created roadmap closeout at repo root. |
+| `SLICE_P8_03_FUTURE_PARKING_LOT` | PASS | 2026-06-05 | `docs/FUTURE_ROADMAP_PARKING_LOT.md` | - | Created allowed/forbidden future work parking lot. |
+| `SLICE_P8_04_CURRENT_STATE_UPDATE` | PASS | 2026-06-05 | `docs/CURRENT_STATE.md` | - | Updated current state doc to reflect P0-P8 completion. |

@@ -6,40 +6,23 @@
 
 ## CURRENT STATUS
 
-P2: Evidence + Regression Harness fully completed. Scenario regression integration tests, deterministic golden receipt tests, CLI output marker validation tests, and property checks have been implemented. All validation modes are active and verified. P3 planning cleanup complete.
+**ROADMAP COMPLETE — P0 through P8 fully implemented and validated.**
+
+All phases P3–P8 have been implemented:
+- P3: `hive_workbench` CLI with list, run, run-file, suite, output modes
+- P4: Scenario metadata, validate-scenarios, expanded scenario library (14 files)
+- P5: Predictable receipt filenames, summarize command, evidence report command
+- P6: golden-preview, regression command, baseline docs
+- P7: QUICKSTART.md, README rewrite, handoff manifest
+- P8: Final audit, ROADMAP_CLOSEOUT.md, future parking lot
 
 ## LAST COMPLETED SLICE
 
-`SLICE_P3_00_CONTEXT_CARD_CLEANUP`
+`P8_FINAL_AUDIT_AND_CLOSEOUT`
 
 ## COMPLETED SLICES
 
-- `SLICE_P3_00_CONTEXT_CARD_CLEANUP` (docs: align roadmap queue with P3 workbench plan)
-- `SLICE_P2_01_GOLDEN_SNAPSHOTS` (Deterministic golden output tests in tests/golden)
-- `SLICE_P2_02_SCENARIO_REGRESSION` (Automated outcome regression checks in regression_tests.rs)
-- `SLICE_P2_03_CLI_STABILITY` (CLI marker output and JSON payload parser tests)
-- `SLICE_P2_04_PROPERTY_CHECKS` (Deterministic parameter grids for monotonicity and validation)
-- `SLICE_P2_05_BENCH_REGRESSION_DOCS` (Created P2 manual regression documentation and comparison template)
-- `SLICE_P1_01_BENCHMARK_BASELINE` (Criterion benchmarks for calculations, serialized, and tick)
-- `SLICE_P1_02_SCENARIO_FIXTURES` (Deterministic scenario loader and JSON schemas)
-- `SLICE_P1_03_RECEIPT_FILE_SINK` (Local receipt writer to receipts/out)
-- `SLICE_P1_04_SCENARIO_RUNNER_CLI` (demo binary CLI with named scenarios)
-- `SLICE_P1_05_BATCH_STRESS_TEST` (batch_stress harness up to 100k workers)
-- `SLICE_P1_06_VALIDATION_SCRIPT_OPT` (optional flag modes in validate scripts)
-- `SLICE_P1_07_DOCS_CONTEXT_UPDATE` (updated documentation and context cards)
-- `SLICE_09_01_PACKAGING_CLEANUP`
-- `SLICE_00_01_PERSONAL_TOOL_BOUNDARY`
-- `SLICE_00_02_DO_NOT_DRIFT`
-- `SLICE_00_03_CURRENT_STATE_AUDIT`
-- `SLICE_02_02_RENAME_COORDINATION_WEIGHT`
-- `SLICE_02_01_SPLIT_CONFIG_AND_METRICS`
-- `SLICE_02_03_INVALID_NUMERIC_INPUT_VALIDATION`
-- `SLICE_03_02_ADD_RAW_METRICS_TO_PAYLOAD`
-- `SLICE_03_01_ADD_TERMINATION_REASON`
-- `SLICE_03_04_ADD_SERDE_RECEIPTS`
-- `SLICE_03_05_JSON_SERIALIZATION_TEST`
-- `SLICE_05_03_VALIDATE_SCRIPTS`
-- `SLICE_00_04_ADD_OPS_CONTEXT_FILES`
+See `ops/COMPLETED_SLICES.md` for the full history including P0-P8.
 
 ## CURRENT CODE SHAPE
 
@@ -52,11 +35,12 @@ Single-crate Rust workspace `swarm_core` containing modules:
 - `apoptosis`: `Apoptosis` move trait.
 - `worker`: `CattleWorker` lifecycle agent and `WorkerOutcome` transitions.
 - `receipt_sink`: module to write epigenetic receipts to disk.
-- `lib`: containing `Scenario` struct and loading helper `Scenario::from_json`.
+- `lib`: `Scenario` struct with optional P4 metadata fields (id, description, expected_outcome, expected_score).
 
 Binary utility tools:
-- `demo`: CLI tool executing single named scenario from file and writing receipts.
+- `hive_workbench`: Full CLI workbench (P3-P6 commands).
 - `batch_stress`: harness executing 100k ticks with/without serialization under load.
+- `demo`: Legacy demo binary (kept for historical reference, superseded by hive_workbench).
 
 ## CURRENT RECEIPT SHAPE
 
@@ -73,27 +57,45 @@ Binary utility tools:
 - `termination_reason: TerminationReason`
 - `fault_signature: String`
 
+## CLI COMMANDS AVAILABLE
+
+```
+hive_workbench list
+hive_workbench run <scenario-name>
+hive_workbench run-file <path>
+hive_workbench suite
+hive_workbench validate-scenarios
+hive_workbench summarize <receipts-path>
+hive_workbench report scenarios
+hive_workbench golden-preview <scenario-name>
+hive_workbench regression
+```
+
+Output modes: `--output human|json|quiet`
+
+Shortcuts: `healthy`, `below`, `exact`, `breach`
+
 ## KNOWN BLOCKERS
 
 None.
 
-## NEXT 3 TASKS
+## NEXT SAFE WORK
 
-1. `TASK_P3_01_CONTEXT_AND_CLI_SPEC` (Align context card and establish CLI specs)
-2. `TASK_P3_02_WORKBENCH_BINARY` (Decide and configure hive_workbench binary targets)
-3. `TASK_P3_03_MANUAL_CLI_PARSER` (Implement manual argument parser without dependencies)
+Refer to `docs/FUTURE_ROADMAP_PARKING_LOT.md` for allowed future ideas.
 
+See `ROADMAP_CLOSEOUT.md` for the completed roadmap summary.
 
 ## DO NOT ADD
 
-Do not add Tokio, HTTP server, async runtime, databases, persistent queues, routers, vLLM/llama.cpp inference, python bindings/PyO3, GPU logic, or CI/CD systems.
+Do not add Tokio, HTTP server, async runtime, databases, persistent queues, routers, LLM inference, python bindings/PyO3, GPU logic, or CI/CD systems.
 
 ## VALIDATION BASELINE
 
 - `cargo fmt --all --check`
 - `cargo check --workspace`
-- `cargo test --workspace`
+- `cargo test --workspace` (9 unit tests + 1 compile test + 23 regression tests = 33 total)
+
 Optional tests:
-- `.\scripts\validate.ps1 -Bench` (benchmarks)
-- `.\scripts\validate.ps1 -Demo` (single runs)
-- `.\scripts\validate.ps1 -Stress` (stress test)
+- `.\scripts\validate.ps1 -Bench` (benchmarks — advisory)
+- `.\scripts\validate.ps1 -Demo` (scenario demo runs)
+- `.\scripts\validate.ps1 -Stress` (100K worker stress test)

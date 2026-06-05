@@ -1,0 +1,18 @@
+{
+  "scenario_name": "TEMPLATE",
+  "id": "optional-unique-id-for-this-scenario",
+  "description": "Describe what this scenario tests and why.",
+  "expected_outcome": "survived",
+  "expected_score": 0.0,
+  "config": {
+    "alpha": 1.0,
+    "beta": 1.0,
+    "gamma": 1.0,
+    "threshold": 10.0
+  },
+  "metrics": {
+    "context_bloat": 0.0,
+    "error_rate": 0.0,
+    "coordination_debt": 0.0
+  }
+}

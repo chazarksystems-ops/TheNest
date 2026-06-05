@@ -1,159 +1,218 @@
-﻿# Kimi/HIVE P0 Lifecycle Primitive
+# TheNest
 
-This project is a P0 personal-tool Rust lifecycle primitive proving:
+**A local personal Rust workbench for scenario-driven worker lifecycle simulation.**
 
-```text
-worker health metrics
--> suffering score calculation
--> threshold breach detection
--> ownership-consuming worker termination
--> termination receipt emitted
+TheNest is a single-binary, synchronous, file-based Rust tool for authoring and running "worker health" scenarios. It simulates a nociceptor-based apoptosis model: workers accumulate a suffering score from weighted health metrics, and terminate when the score crosses a configurable threshold.
+
+---
+
+## What This Is
+
+- A **Rust learning and simulation workbench** for the nociceptor/apoptosis model
+- A **scenario runner** for named and file-based worker health scenarios
+- A **receipt generator** for terminated workers (JSON epigenetic payloads)
+- A **regression and golden test system** for deterministic output verification
+- A **personal local tool** — runs synchronously, no server, no scheduler, no database
+
+---
+
+## What This Is Not
+
+- Not a production system
+- Not a scheduler or task queue
+- Not a server or REST API
+- Not a database
+- Not an async/Tokio runtime
+- Not a model-serving or LLM inference system
+- Not a distributed swarm
+
+---
+
+## Quickstart
+
+```powershell
+# Validate the project
+.\scripts\validate.ps1
+
+# List available scenarios
+cargo run --bin hive_workbench -- list
+
+# Run a scenario
+cargo run --bin hive_workbench -- run healthy
+cargo run --bin hive_workbench -- run breach
+
+# Run all scenarios as a suite
+cargo run --bin hive_workbench -- suite
+
+# Generate evidence report
+cargo run --bin hive_workbench -- report scenarios
 ```
 
-## What This Proves
+See [docs/QUICKSTART.md](docs/QUICKSTART.md) for the full command reference.
 
-- **Compile-Enforced Apoptosis**: Worker instances are consumed by value using Rust's ownership system during terminal transitions. It is a compile-time impossibility to reuse or re-schedule a terminated agent.
-- **Dynamic Pain Metric Evaluation**: Live pain score computation using the formula:
-  `score = alpha * context_bloat + beta * error_rate + gamma * coordination_debt`
-- **Hardened Epigenetic Graveyard Receipts**: Terminated outcomes serialize cleanly to stable JSON with all raw metrics, config weights, and structured reasons.
+---
 
-## What This Does NOT Prove (Explicitly Excluded)
-
-- **Orchestration / Scheduling**: No async runtimes (Tokio or actor frameworks) manage worker loops.
-- **Model Inference**: No LLM connections (local or remote), vLLM instances, or tokenizer logic are implemented.
-- **Python / GPU Integration**: No PyO3, Python scripts, PyTorch, or CUDA bindings exist.
-- **Enterprise Middleware**: No database, queue, HTTP routing, or network systems are present.
-
-## Directory Structure
+## Directory Map
 
 ```text
 TheNest/
-  Cargo.toml          # Workspace manifest
-  .gitignore          # Git exclusions
-  README.md           # This document
-
-  swarm_core/         # Core lifecycle primitive crate
-    Cargo.toml
+  Cargo.toml                   # Workspace root
+  swarm_core/                  # Core library + binaries
     src/
-      lib.rs          # Export structures and baseline tests
-      config.rs       # NociceptorConfig with presets and checks
-      metrics.rs      # WorkerHealthMetrics for runtime metrics
-      nociceptor.rs   # Suffering calculator
-      reason.rs       # TerminationReason enum
-      payload.rs      # EpigeneticPayload receipt data
-      apoptosis.rs    # Apoptosis move trait
-      worker.rs       # CattleWorker and tick transition
+      lib.rs                   # Scenario, Nociceptor, Worker types
+      config.rs                # NociceptorConfig
+      metrics.rs               # WorkerHealthMetrics
+      nociceptor.rs            # Suffering score calculation
+      apoptosis.rs             # Apoptosis trait
+      worker.rs                # CattleWorker lifecycle
+      reason.rs                # TerminationReason enum
+      payload.rs               # EpigeneticPayload receipt type
+      receipt_sink.rs          # Receipt file writing
+    src/bin/
+      hive_workbench.rs        # Main CLI binary
+      batch_stress.rs          # Stress test runner
     tests/
-      regression_tests.rs # Golden tests, CLI markers, & property scoring
-      golden/
-        golden_receipt_exact_threshold.json # Fixed UUID golden output
+      regression_tests.rs      # 23 regression tests
+      compile_tests.rs         # Trybuild compile-fail test
+      golden/                  # Deterministic golden receipt files
+    benches/                   # Criterion benchmarks
 
-  docs/               # Personal-tool doctrines and boundaries
-  ops/                # Low-context dispatch queues and context card
-  agent/agent/skills/             # Small task-runner execution scripts
-  agent/agent/slices/             # Slice specifications
-  agent/agent/templates/          # Spec templates
-  reference/          # Historical Grok/Gemini design logs & schemas
-  scripts/            # Validation scripts (validate.sh, validate.ps1)
-```
+  scenarios/                   # Scenario JSON files
+  receipts/out/                # Generated termination receipts (gitignored)
+  reports/
+    evidence/                  # Evidence reports (Markdown)
+    baselines/                 # Baseline status docs
+    benchmarks/                # Benchmark output
+    audits/                    # Final audit docs
+    handoff/                   # Handoff manifest
 
-## How to Validate
-
-Run the validation suite directly from the workspace root:
-
-### Windows PowerShell
-```powershell
-# Run default light correctness check (check + format + tests)
-.\scripts\validate.ps1
-
-# Run with optional benchmarks
-.\scripts\validate.ps1 -Bench
-
-# Run with optional scenario workbench CLI runner demo
-.\scripts\validate.ps1 -Demo
-
-# Run with optional batch stress harness
-.\scripts\validate.ps1 -Stress
-```
-
-### Linux / Unix Shell
-```bash
-chmod +x ./scripts/validate.sh
-
-# Run default light correctness check
-./scripts/validate.sh
-
-# Run optional checks
-./scripts/validate.sh --bench
-./scripts/validate.sh --demo
-./scripts/validate.sh --stress
+  docs/                        # Design and policy docs
+  scripts/                     # validate.ps1, package_handoff.ps1
+  ops/                         # Context cards and slice queue
+  agent/                       # Task and microtask files
+  reference/                   # Reference documents
 ```
 
 ---
 
-## P1 Scenario Workbench & CLI Usage
+## Core Rust Concepts
 
-P1 turns the core library primitives into a local developer workbench under `swarm_core`.
+| Type | Purpose |
+|---|---|
+| `NociceptorConfig` | Weights (alpha, beta, gamma) and termination threshold |
+| `WorkerHealthMetrics` | Live metrics: context_bloat, error_rate, coordination_debt |
+| `Nociceptor` | Computes `score = alpha*bloat + beta*error + gamma*debt` |
+| `CattleWorker` | Executes one tick: survive or trigger apoptosis |
+| `EpigeneticPayload` | Hardened receipt emitted on termination |
+| `TerminationReason` | Enum: ThresholdBreach |
+| `Apoptosis` | Trait: consumes self, yields receipt |
 
-### 1. Run Named Scenarios
-You can run deterministic scenarios using the demo runner. Surviving outcomes print live scores, while terminated outcomes output a structured `EpigeneticPayload` receipt and write it to `receipts/out/<worker-id>_receipt.json`.
+---
 
-```powershell
-# Run a healthy scenario (worker survives)
-cargo run --bin demo -- healthy
+## Scenario Workbench
 
-# Run a breach scenario (worker triggers apoptosis)
-cargo run --bin demo -- breach
+Scenarios are JSON files in `scenarios/`. Each defines a worker configuration and metrics.
 
-# Run a borderline threshold scenario
-cargo run --bin demo -- exact
-
-# Run a custom JSON scenario path
-cargo run --bin demo -- scenarios/worker_survives.json
+```json
+{
+  "scenario_name": "worker_survives",
+  "description": "Optional description",
+  "expected_outcome": "survived",
+  "config": { "alpha": 1.0, "beta": 1.0, "gamma": 1.0, "threshold": 10.0 },
+  "metrics": { "context_bloat": 2.0, "error_rate": 1.0, "coordination_debt": 1.0 }
+}
 ```
 
-### 2. Run Batch Stress Harness
-Measure worker tick and serialization performance under varying cohort scales (from 100 to 100,000 workers):
-```powershell
-cargo run --release --bin batch_stress
+### CLI Commands
+
+| Command | What it does |
+|---|---|
+| `list` | List all available scenario files |
+| `run <name>` | Run a named or shortcut scenario |
+| `run-file <path>` | Run a scenario from a file path |
+| `suite` | Run all scenarios, print result table |
+| `validate-scenarios` | Check expected_outcome matches actual |
+
+Shortcuts: `healthy`, `below`, `exact`, `breach`
+
+---
+
+## Receipts and Reports
+
+When a worker terminates, a receipt is written to:
+```
+receipts/out/<scenario_name>_receipt.json
 ```
 
-### 3. Run Microbenchmarks
-Execute the Criterion benchmark suite to measure nociceptor calculation speeds, worker ticking paths, and JSON serialization throughput:
+Receipts are not committed (listed in `.gitignore`).
+
+```powershell
+# Summarize receipts
+cargo run --bin hive_workbench -- summarize receipts/out
+
+# Generate Markdown evidence report
+cargo run --bin hive_workbench -- report scenarios
+```
+
+Evidence report written to: `reports/evidence/SCENARIO_EVIDENCE_REPORT.md`
+
+---
+
+## Regression and Golden Tests
+
+Golden files are in `swarm_core/tests/golden/`. They record the expected deterministic receipt output for specific scenarios (using `Uuid::nil()` for reproducibility).
+
+Tests compare against golden files — they never overwrite them.
+
+```powershell
+# Preview what a golden receipt would look like (no write)
+cargo run --bin hive_workbench -- golden-preview exact --output json
+
+# Run full regression check
+cargo run --bin hive_workbench -- regression
+```
+
+See [docs/P6_GOLDEN_UPDATE_POLICY.md](docs/P6_GOLDEN_UPDATE_POLICY.md) for the update policy.
+
+---
+
+## Validation
+
+```powershell
+.\scripts\validate.ps1            # Format + check + test
+.\scripts\validate.ps1 -Demo     # Also run scenario demo
+.\scripts\validate.ps1 -Stress   # Also run batch stress (100K workers)
+.\scripts\validate.ps1 -Bench    # Also run Criterion benchmarks (advisory)
+```
+
+---
+
+## Benchmarks
+
 ```powershell
 cargo bench
 ```
-Visual reports are generated at `target/criterion/report/index.html`.
+
+Results are advisory — they are not a required gate for commits.
+
+Historical benchmarks at: `reports/benchmarks/`
 
 ---
 
-## P2 Evidence & Regression Testing
+## Packaging
 
-P2 ensures code behavior, serialization schemas, and CLI commands remain stable and correct over time.
-
-### 1. Golden Receipt Verification
-Golden output snapshots are stored under `swarm_core/tests/golden/`. The test executes the exact-threshold scenario using a deterministic Nil UUID, serializes the receipt, and asserts structural equality with [golden_receipt_exact_threshold.json](file:///C:/Users/cheez/Downloads/TheNest/swarm_core/tests/golden/golden_receipt_exact_threshold.json).
-
-### 2. CLI Stability Tests
-Tests execute the scenario runner demo via process execution and confirm output status codes, text markers (`Outcome:`, `Suffering score:`), and correct JSON receipt schemas.
-
-### 3. Scoring Property Checks
-Grids of metric configurations are evaluated programmatically to verify:
-- Monotonicity: Increasing pain parameters never decreases the computed score.
-- Range Boundaries: Verify NaN, infinity, and negative values are strictly rejected.
-
-### 4. Running Regression Tests
-All regression tests run as part of the default validation suite:
 ```powershell
-cargo test --workspace
+.\scripts\package_handoff.ps1
 ```
 
+Output: `C:\Users\cheez\Downloads\TheNest_handoff.zip`
+
+Excludes `target/`, `receipts/out/*`, and zip files from the archive.
+
 ---
 
-## Drift Boundaries & Exclusions (Strictly Enforced)
+## Next Safe Work
 
-To keep the codebase small and focused as a local personal tool, the following remain strictly **excluded** in P1/P2:
-- No async runtimes (Tokio or actor frameworks) or network ports/servers.
-- No databases, persistent ledgers, queues, or watchers.
-- No local or remote LLM connections, GPU bindings, or Python PyO3 bindings.
+See [docs/FUTURE_ROADMAP_PARKING_LOT.md](docs/FUTURE_ROADMAP_PARKING_LOT.md) for allowed future ideas and permanently forbidden scope.
 
+The full roadmap (P0–P8) is complete. See [ROADMAP_CLOSEOUT.md](ROADMAP_CLOSEOUT.md).

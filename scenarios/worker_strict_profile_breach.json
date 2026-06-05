@@ -1,0 +1,16 @@
+{
+  "scenario_name": "worker_strict_profile_breach",
+  "description": "Tight weights and a very low threshold. Even modest metrics breach the threshold.",
+  "expected_outcome": "terminated",
+  "config": {
+    "alpha": 2.0,
+    "beta": 2.0,
+    "gamma": 2.0,
+    "threshold": 3.0
+  },
+  "metrics": {
+    "context_bloat": 1.0,
+    "error_rate": 1.0,
+    "coordination_debt": 1.0
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "scenario_name": "invalid_negative_threshold",
+  "description": "Threshold is negative — should fail NociceptorConfig validation.",
+  "expected_outcome": "invalid",
+  "config": {
+    "alpha": 1.0,
+    "beta": 1.0,
+    "gamma": 1.0,
+    "threshold": -5.0
+  },
+  "metrics": {
+    "context_bloat": 1.0,
+    "error_rate": 1.0,
+    "coordination_debt": 1.0
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "scenario_name": "worker_lenient_profile_survives",
+  "description": "Very low weights and a very high threshold. High metrics still survive.",
+  "expected_outcome": "survived",
+  "config": {
+    "alpha": 0.1,
+    "beta": 0.1,
+    "gamma": 0.1,
+    "threshold": 100.0
+  },
+  "metrics": {
+    "context_bloat": 10.0,
+    "error_rate": 10.0,
+    "coordination_debt": 10.0
+  }
+}
