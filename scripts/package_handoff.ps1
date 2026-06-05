@@ -21,7 +21,8 @@ $itemsToCopy = @(
     "scripts",
     "ops",
     "agent",
-    "reference"
+    "reference",
+    ".github"
 )
 
 # Copy files & folders to staging (excluding target inside folders just in case)
@@ -56,8 +57,9 @@ $zipContents = tar -tf $zipPath 2>$null
 if ($null -eq $zipContents) {
     Write-Host "tar not available, skipping verify via tar."
 } else {
-    $hasTarget = $zipContents | Where-Object { $_ -like "*target*" }
+    $hasTarget = $zipContents | Where-Object { ($_ -like "target/*") -or ($_ -like "*/target/*") }
     $hasOutReceipts = $zipContents | Where-Object { $_ -like "*receipts/out/*" -and $_ -notlike "*receipts/out/" }
+
     
     if ($hasTarget) {
         Write-Warning "Validation FAILED: target/ folder found in handoff zip!"

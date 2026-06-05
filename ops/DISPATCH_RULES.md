@@ -1,10 +1,9 @@
 # Dispatch Rules
 
-- Use dependency order, not filename order.
-- Send one slice at a time.
-- Include doctrine, drift, validation, final report format, and current context card.
-- Do not ask for review unless truly blocked.
-- Do not widen allowed files silently.
-- Files listed under “Relevant current files” are context only. They are read-only unless also listed under “Allowed edits” or “Allowed new files.”
-- Update `CURRENT_CONTEXT_CARD.md` and `COMPLETED_SLICES.md` after completion.
-- Keep README edits tiny until the README polish slice.
+- **Low-Context Bounded Execution:** Subagents must only read the minimal context files specified in their assigned task/microtask.
+- **Strict Scope Boundaries:** Subagents are forbidden from modifying files outside the "Allowed edits" list.
+- **Single Slice Dispatch:** Assign only one microtask to a subagent at a time.
+- **No Architectural Drift:** Reject and report any tasks that imply adding runtimes, schedulers, queues, databases, HTTP servers, Tokio, or network layers. Keep the codebase file-only and local.
+- **Lightweight Validation:** Always execute the default workspace validation commands before and after edits.
+- **Progress Tracking:** Update completed slices and context cards upon successful microtask verify-and-merge.
+- **Done Condition:** Stop immediately and return a 2-line summary report when the stop condition is reached.

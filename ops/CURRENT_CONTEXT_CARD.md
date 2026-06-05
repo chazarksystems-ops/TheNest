@@ -77,11 +77,12 @@ Binary utility tools:
 
 None.
 
-## NEXT 3 SLICES
+## NEXT 3 TASKS
 
-1. `SLICE_P3_01_CLI_ARG_SPEC` (CLI argument specification document)
-2. `SLICE_P3_02_WORKBENCH_BINARY_DECISION` (Evolve/rename demo or create hive_workbench)
-3. `SLICE_P3_03_MANUAL_CLI_PARSER` (Implement manual command parser)
+1. `TASK_P3_01_CONTEXT_AND_CLI_SPEC` (Align context card and establish CLI specs)
+2. `TASK_P3_02_WORKBENCH_BINARY` (Decide and configure hive_workbench binary targets)
+3. `TASK_P3_03_MANUAL_CLI_PARSER` (Implement manual argument parser without dependencies)
+
 
 ## DO NOT ADD
 
