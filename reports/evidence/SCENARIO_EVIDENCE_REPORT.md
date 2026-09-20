@@ -4,6 +4,7 @@ Generated: 2026-06-05
 
 | Scenario | Expected | Actual | Score | Threshold | Status |
 |---|---|---|---|---|---|
+| TEMPLATE | survived | survived | 0.00 | 10.00 | PASS |
 | invalid_infinite_metric | invalid | invalid | 0.00 | 0.00 | PASS |
 | invalid_negative_threshold | invalid | invalid | 0.00 | 0.00 | PASS |
 | worker_exact_threshold | - | terminated | 10.00 | 10.00 | OK |
